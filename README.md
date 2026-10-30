@@ -16,19 +16,19 @@ SkyMind is the complete software stack for an autonomous quadcopter that:
 It runs entirely in a built-in physics simulator (no hardware needed). The same autonomy code drives a real
 drone through a Pixhawk (ArduPilot/PX4) over MAVLink.
 
-## Two builds
+## Three builds
 
-| | **SkyMind Micro Quiet** (college build) | SkyMind (full size) |
-|---|---|---|
-| Size / weight | 175 mm, 4" props, **240 g** (sub-250 g class) | 450 mm, 10" props, 1.2 kg |
-| Parts cost | **≈ $230** | ≈ $700 |
-| Brains | Raspberry Pi Zero 2 W + F405 flight controller | Raspberry Pi 5 + Pixhawk |
-| Obstacle sensing | 6 × VL53L1X time-of-flight (9 g) with turn-then-go | 360° RPLidar |
-| Hover power / endurance | 42 W / 8.7 min | 134 W / 14.3 min |
-| Noise (tip speed) | 77 m/s, 2.7 dB quieter than a 3.5" micro | 69 m/s |
-| Config | `config/micro_quiet.yaml`, scenario `config/micro_indoor.yaml` | `config/default.yaml` |
+| | **SkyMind Nano** (₹5,000 build) | **Micro Quiet** (college build) | SkyMind (full size) |
+|---|---|---|---|
+| Parts cost | **≈ ₹4,000–5,000** | ≈ $230 (₹19k) | ≈ $700 |
+| Size / weight | ~120 mm, **80 g** | 175 mm, 240 g | 450 mm, 1.2 kg |
+| Flight control | ESP32-S3 + ESP-Drone firmware | F405 + ArduPilot | Pixhawk + ArduPilot/PX4 |
+| Where the AI runs | **your laptop**, over WiFi | Pi Zero 2 W onboard | Pi 5 onboard |
+| Obstacle sensing | 3 × VL53L0X, forward | 6 × VL53L1X ring | 360° RPLidar |
+| Flight time (est.) | ~4.7 min | ~8.7 min | ~14 min |
+| Config | `nano.yaml` / `nano_room.yaml` | `micro_quiet.yaml` / `micro_indoor.yaml` | `default.yaml` |
+| Guide | [docs/BUDGET_BUILD.md](docs/BUDGET_BUILD.md) | [docs/MICRO_BUILD.md](docs/MICRO_BUILD.md) | [docs/HARDWARE.md](docs/HARDWARE.md) |
 
-Parts list, weight budget, wiring and quiet-flying tips: **[docs/MICRO_BUILD.md](docs/MICRO_BUILD.md)**.
 
 ## Quick start
 
@@ -38,6 +38,7 @@ python -m pytest -q                                          # safety-critical b
 python -m skymind sim                                        # fly, record, judge the "Forest Run" mission
 python -m skymind sim --config config/windy_city.yaml        # gusty wind, narrow alley, wall to climb
 python -m skymind sim --config config/micro_indoor.yaml      # the $230 micro drone in a college lab
+python -m skymind sim --config config/nano_room.yaml         # the ₹5,000 nano drone, brain on the laptop over WiFi
 ```
 
 A run writes `runs/sim-<timestamp>/`:
@@ -65,8 +66,14 @@ recorded 557 frames, 9 detection snapshots
   efficiency    89.7   (weight 0.15)
 ```
 
-Robustness across random seeds (sensor noise, gusts): forest course 8/8 landed, 0 collisions,
-mean 90.3; micro indoor course 8/8 (3.5") and 6/6 (Quiet 4") landed, 0 collisions, mean 87.4 / 89.7.
+Robustness across random seeds (sensor noise, gusts, WiFi lag and packet loss), all with 0 collisions:
+
+| Scenario | Runs landed | Mean score |
+|---|---:|---:|
+| Forest (full size) | 6/6 | 91.0 |
+| Micro Quiet, indoor lab | 6/6 | 90.7 |
+| Nano, room + doorway, 60 ms lag, 5 % loss | 8/8 | 94.6 |
+| Nano, bad WiFi: 150 ms lag, 20 % loss | 6/6 | 93.1 |
 
 ## Other commands
 
@@ -75,6 +82,7 @@ python -m skymind judge runs/sim-...                    # re-score a run (e.g. a
 python -m skymind analyze video.mp4 --model yolov8n.onnx --labels coco.txt   # AI + quality scoring of any footage
 python -m skymind fly --connect /dev/ttyAMA0 --lidar /dev/ttyUSB0            # real drone, BENCH MODE (never arms)
 python -m skymind fly --connect /dev/ttyAMA0 --lidar /dev/ttyUSB0 --arm      # real autonomous flight
+python -m skymind fly --config config/nano_room.yaml --esp-drone udp://192.168.43.42   # Nano (bench mode)
 python -m skymind design config/micro.yaml config/micro_quiet.yaml           # compare builds: power, endurance, noise
 python -m skymind design config/micro_quiet.yaml --sweep-battery 4.4,6.7,8.1,9.6   # pick a battery
 python -m skymind bench --config config/micro_indoor.yaml                    # onboard CPU budget (run it on the Pi)
@@ -84,6 +92,7 @@ python -m skymind bench --config config/micro_indoor.yaml                    # o
 
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the pieces fit, with the main design decisions
 * [docs/JUDGING.md](docs/JUDGING.md): how flights are scored, and a 5-minute demo script for judges
+* [docs/BUDGET_BUILD.md](docs/BUDGET_BUILD.md): the ₹5,000 Nano build (ESP32 + laptop brain)
 * [docs/MICRO_BUILD.md](docs/MICRO_BUILD.md): the small, quiet, ≈ $230 college build
 * [docs/HARDWARE.md](docs/HARDWARE.md): the full-size build: parts, wiring, autopilot parameters and bring-up
 
@@ -96,13 +105,14 @@ skymind/
   vision/       detectors, image quality, recorder, camera input, offline analysis
   sim/          quadrotor physics, world, lidar, synthetic camera
   evaluation/   flight judge, map/timeline plots
-  hal/          MAVLink bridge, RPLidar + VL53L1X ToF-ring drivers, real-flight runner
+  hal/          MAVLink + ESP-Drone (cflib) links, RPLidar / VL53L1X / ESP32-CAM sensor drivers, real-flight runner
   power.py      power / endurance / rotor-noise model
   design.py     build comparison calculator
   bench.py      companion-computer CPU benchmark
   mission.py    FlightBrain (autonomy) + SimulationRunner
   cli.py        `python -m skymind ...`
-config/         mission scenarios (YAML)
+config/         hardware profiles and mission scenarios (YAML)
+firmware/       ESP32-CAM sensor-head sketch (Nano build)
 tests/          unit + end-to-end mission tests
 ```
 

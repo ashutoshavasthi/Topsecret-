@@ -45,7 +45,11 @@ class OccupancyGrid:
     def _valid(self, r: np.ndarray, c: np.ndarray) -> np.ndarray:
         return (r >= 0) & (r < self.ny) & (c >= 0) & (c < self.nx)
 
-    def update(self, position: np.ndarray, ranges: np.ndarray, angles: np.ndarray, max_range: float) -> None:
+    def update(
+        self, position: np.ndarray, ranges: np.ndarray, angles: np.ndarray, max_range: float, hit_weight: np.ndarray | None = None
+    ) -> None:
+        """``hit_weight`` (per ray, 0..1) scales the occupied evidence. Wide ToF cones put their
+        centre ray at 1 and edge rays lower, so one cone reading does not wall off a whole arc."""
         o = position[:2]
         dirs = np.stack([np.cos(angles), np.sin(angles)], axis=1)
         # Free space: sample along every beam up to just before the return.
@@ -59,9 +63,13 @@ class OccupancyGrid:
         self.log_odds[free] += self.l_free
         # Occupied: beam endpoints that actually hit something.
         hit = ranges < max_range * 0.995  # max range means 'no return'
+        w = np.ones(len(ranges)) if hit_weight is None else np.asarray(hit_weight, dtype=float)
         hr, hc = self.to_cell(o[None, :] + dirs[hit] * ranges[hit, None])
         ok = self._valid(hr, hc)
-        self.log_odds[hr[ok], hc[ok]] += self.l_occ - self.l_free * free[hr[ok], hc[ok]]
+        evidence = np.zeros_like(self.log_odds)
+        np.maximum.at(evidence, (hr[ok], hc[ok]), w[hit][ok] * self.l_occ)
+        cells = evidence > 0
+        self.log_odds[cells] += evidence[cells] - self.l_free * free[cells]
         np.clip(self.log_odds, self.l_min, self.l_max, out=self.log_odds)
 
     def obstacle_mask(self, inflate: float) -> np.ndarray:

@@ -19,8 +19,9 @@ from skymind.config import SkyMindConfig
 from skymind.control.estimator import StateEstimate, StateEstimator
 from skymind.control.flight_controller import FlightController, Setpoint
 from skymind.math3d import wrap_angle
-from skymind.perception.avoidance import AvoidanceCommand, AvoidMode, ObstacleAvoider
+from skymind.perception.avoidance import AvoidanceCommand, AvoidMode, ObstacleAvoider, braking_speed
 from skymind.perception.mapping import GlobalPlanner
+from skymind.perception.range_sensors import map_hit_weights
 from skymind.power import PowerModel
 from skymind.sim.camera_sim import SimCamera
 from skymind.sim.lidar import SimLidar
@@ -95,6 +96,7 @@ class FlightBrain:
         self.no_progress_time = 0.0
         a = cfg.avoidance
         self.planner = GlobalPlanner(m.geofence, a.safety_radius, a.map_resolution) if a.use_global_planner else None
+        self.map_weights = map_hit_weights(cfg.sensors)
         self.replan_timer = 0.0
         self.planned_goal: np.ndarray | None = None
         self.local_goal: np.ndarray | None = None
@@ -164,7 +166,7 @@ class FlightBrain:
                 continue
             u = d / speed
             clear = float(self.avoider.corridor_clearance(ranges, angles, np.array([math.atan2(u[1], u[0])]))[0])
-            vmax = math.sqrt(2.0 * a.max_decel * max(clear - a.stop_distance, 0.0))
+            vmax = braking_speed(clear - a.stop_distance, a.max_decel, a.reaction_time)
             along = float(out @ u)
             if along > vmax:
                 out = out - (along - vmax) * u
@@ -198,7 +200,7 @@ class FlightBrain:
             dist = float(np.linalg.norm(to_goal))
             steer = to_goal
             if self.planner is not None:
-                self.planner.grid.update(pos, ranges, angles, self.avoider.max_range)
+                self.planner.grid.update(pos, ranges, angles, self.avoider.max_range, self.map_weights)
                 self.replan_timer -= dt
                 goal_changed = self.planned_goal is None or not np.array_equal(self.planned_goal, self.goal)
                 if goal_changed or self.replan_timer <= 0.0:
@@ -267,6 +269,10 @@ class FlightBrain:
             # Point the camera (and, with a ToF ring, the best sensors) where we're going.
             if turning:
                 face = steer
+            elif a.max_heading_offset_deg is not None and avoid.mode is AvoidMode.BLOCKED:
+                # Sensors only look one way: rotate to search for an opening.
+                look = est.euler[2] + math.radians(100.0)
+                face = np.array([math.cos(look), math.sin(look)])
             elif a.max_heading_offset_deg is not None:
                 face = avoid.velocity_xy
             else:
@@ -372,6 +378,12 @@ class SimulationRunner:
         tip_speeds: list[float] = []
         cam_frame = 0
         last_analysis = FrameAnalysis()
+        lag_ticks = int(round(cfg.sim.link_latency * cfg.sensors.lidar_rate_hz))
+        sensed: list = []
+        in_flight: list = []
+        active_sp: Setpoint | None = None
+        active_sp_t = 0.0
+        watchdog_sp: Setpoint | None = None
         t = 0.0
         wall0 = time.time()
         hard_stop = cfg.mission.max_duration + 60.0
@@ -388,18 +400,36 @@ class SimulationRunner:
 
                 if k % brain_every == 0:
                     ranges, angles = self.lidar.scan(st.position, st.euler[2])
+                    # Over a ground-station link the brain sees data that is link_latency old.
+                    sensed.append((est, ranges, angles))
+                    b_est, b_ranges, b_angles = sensed[0] if len(sensed) > lag_ticks else sensed[-1]
+                    if len(sensed) > lag_ticks:
+                        sensed.pop(0)
                     landed = self.sim.on_ground and self.brain.mode is FlightMode.LAND
-                    brain_out = self.brain.update(est, ranges, angles, self.battery.fraction, t, brain_every * dt, landed)
+                    brain_out = self.brain.update(b_est, b_ranges, b_angles, self.battery.fraction, t, brain_every * dt, landed)
                     for e in brain_out.events:
                         events.append((round(t, 2), e))
                         self._log(f"[{t:6.2f}s] {e}")
+                    if self.rng.random() >= cfg.sim.link_drop_prob:
+                        in_flight.append((t + cfg.sim.link_latency, brain_out.setpoint))
+                while in_flight and in_flight[0][0] <= t + 1e-9:
+                    active_sp = in_flight.pop(0)[1]
+                    active_sp_t = t
+                    watchdog_sp = None
 
                 mode = self.brain.mode
-                if mode in (FlightMode.LANDED, FlightMode.CRASHED, FlightMode.PREFLIGHT) or brain_out is None:
+                if mode in (FlightMode.LANDED, FlightMode.CRASHED, FlightMode.PREFLIGHT) or active_sp is None:
                     out = self.controller.idle()
                     self.controller.reset()
                 else:
-                    out = self.controller.update(est, brain_out.setpoint, dt)
+                    sp = active_sp
+                    if t - active_sp_t > cfg.sim.link_timeout:
+                        # Onboard watchdog: link silent too long -> hold a hover where we are.
+                        if watchdog_sp is None:
+                            watchdog_sp = Setpoint(position=est.position.copy(), yaw=est.euler[2])
+                            events.append((round(t, 2), "link timeout: onboard hover hold"))
+                        sp = watchdog_sp
+                    out = self.controller.update(est, sp, dt)
 
                 self.sim.step(out.motors, dt, self.world.wind_at(self.rng))
                 self.battery.drain(self.sim.state.motor_thrust, dt)

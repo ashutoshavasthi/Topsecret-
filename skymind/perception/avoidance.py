@@ -27,6 +27,16 @@ from skymind.config import AvoidanceConfig
 from skymind.math3d import wrap_angle
 
 
+def braking_speed(room: float, decel: float, reaction_time: float = 0.0) -> float:
+    """Largest speed v that still stops within ``room``: v*t_r + v^2/(2a) <= room.
+
+    ``reaction_time`` covers sensing-to-motor latency, e.g. a WiFi link to a
+    laptop ground station. During it the drone keeps flying at full speed."""
+    room = max(room, 0.0)
+    at = decel * reaction_time
+    return -at + math.sqrt(at * at + 2.0 * decel * room)
+
+
 class AvoidMode(str, Enum):
     CLEAR = "clear"  # flying straight at the goal
     DETOUR = "detour"  # steering around an obstacle
@@ -110,7 +120,7 @@ class ObstacleAvoider:
 
         # Speed so that we can always brake before stop_distance, and slow near the goal.
         room = max(heading_clear - cfg.stop_distance, 0.0)
-        speed = min(cruise_speed, math.sqrt(2.0 * cfg.max_decel * room), 1.2 * dist_goal + 0.1)
+        speed = min(cruise_speed, braking_speed(room, cfg.max_decel, cfg.reaction_time), 1.2 * dist_goal + 0.1)
         if mode is AvoidMode.BLOCKED:
             speed = min(speed, 0.3)
         vel = speed * np.array([math.cos(heading), math.sin(heading)])

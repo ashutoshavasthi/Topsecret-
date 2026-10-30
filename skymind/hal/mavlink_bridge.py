@@ -77,7 +77,11 @@ class MavlinkVehicle:
         self.set_mode("RTL")
 
     # -------------------------------------------------------------- setpoints
-    def send_velocity_enu(self, velocity: np.ndarray, yaw_enu: float) -> None:
+    def keepalive(self) -> None:  # ArduPilot/PX4 hold position on their own between setpoints
+        pass
+
+    def send_velocity_enu(self, velocity: np.ndarray, yaw_enu: float, altitude: float | None = None) -> None:
+        """``altitude`` is unused here: height is controlled through the vertical velocity."""
         vn = enu_to_ned(velocity)
         self.conn.mav.set_position_target_local_ned_send(
             0,

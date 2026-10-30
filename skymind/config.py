@@ -97,6 +97,7 @@ class AvoidanceConfig:
     # With sparse sensors (ToF ring), slow down until the nose (best-covered sector) faces the
     # direction of travel. None = move in any direction at full speed (360-degree lidar).
     max_heading_offset_deg: float | None = None
+    reaction_time: float = 0.0  # s of sensing-to-actuation latency to budget for when braking
 
 
 @dataclass
@@ -194,6 +195,10 @@ class JudgeConfig:
 class SimConfig:
     physics_hz: float = 250.0
     seed: int = 7
+    # Ground-station link (brain on a laptop, flight control on the drone):
+    link_latency: float = 0.0  # s, one-way delay applied to sensor data and to setpoints
+    link_drop_prob: float = 0.0  # probability that a setpoint packet is lost
+    link_timeout: float = 0.5  # s without setpoints -> onboard watchdog holds a hover
 
 
 @dataclass

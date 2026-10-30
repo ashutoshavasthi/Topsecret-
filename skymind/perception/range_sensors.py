@@ -43,3 +43,12 @@ def expand_cone_readings(readings: np.ndarray, cfg: SensorConfig) -> np.ndarray:
 def collapse_to_cones(subray_ranges: np.ndarray, cfg: SensorConfig) -> np.ndarray:
     """Nearest return per cone, as a single-zone ToF sensor reports it."""
     return np.asarray(subray_ranges).reshape(len(cfg.tof_headings_deg), cfg.tof_subrays).min(axis=1)
+
+
+def map_hit_weights(cfg: SensorConfig) -> np.ndarray | None:
+    """Occupancy-map evidence per ray: full for the cone centre, low for cone edges."""
+    if cfg.range_sensor != "tof_ring":
+        return None
+    offsets = np.linspace(-1.0, 1.0, cfg.tof_subrays)
+    per_cone = np.where(np.abs(offsets) < 1e-9, 1.0, 0.3)
+    return np.tile(per_cone, len(cfg.tof_headings_deg))

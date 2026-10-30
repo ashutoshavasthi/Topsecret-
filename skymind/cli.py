@@ -110,13 +110,26 @@ def cmd_fly(args: argparse.Namespace) -> int:
     from skymind.vision.camera import open_camera
 
     cfg = load_config(args.config)
+    if bool(args.connect) == bool(args.esp_drone):
+        print("give exactly one of --connect (MAVLink autopilot) or --esp-drone (ESP-Drone over WiFi)", file=sys.stderr)
+        return 2
     if args.arm and not args.yes:
-        reply = input("ARM MOTORS AND FLY AUTONOMOUSLY? Area clear, RC pilot ready? type 'fly': ")
+        reply = input("ARM MOTORS AND FLY AUTONOMOUSLY? Area clear, someone ready to stop it? type 'fly': ")
         if reply.strip() != "fly":
             print("aborted")
             return 1
-    vehicle = MavlinkVehicle(args.connect, args.baud)
-    if cfg.sensors.range_sensor == "tof_ring":
+    if args.esp_drone:
+        from skymind.hal.esp_drone import EspDroneLink
+
+        vehicle = EspDroneLink(args.esp_drone, max_altitude=cfg.mission.max_altitude)
+    else:
+        vehicle = MavlinkVehicle(args.connect, args.baud)
+
+    if args.esp_drone:
+        from skymind.hal.esp_sensors import EspCamSensors
+
+        lidar = EspCamSensors(cfg.sensors, port=args.sensor_port)  # ToF readings from the ESP32-CAM
+    elif cfg.sensors.range_sensor == "tof_ring":
         from skymind.hal.tof_ring import ToFRing
 
         lidar = ToFRing(cfg.sensors, args.xshut.split(",") if args.xshut else None)
@@ -191,7 +204,9 @@ def build_parser() -> argparse.ArgumentParser:
     a.set_defaults(func=cmd_analyze)
 
     f = sub.add_parser("fly", help="run on a real drone via MAVLink (bench mode unless --arm)")
-    f.add_argument("--connect", required=True, help="e.g. /dev/ttyAMA0, udp:127.0.0.1:14550")
+    f.add_argument("--connect", help="MAVLink autopilot, e.g. /dev/ttyAMA0, udp:127.0.0.1:14550")
+    f.add_argument("--esp-drone", help="ESP-Drone / Crazyflie URI, e.g. udp://192.168.43.42 (Nano build)")
+    f.add_argument("--sensor-port", type=int, default=2399, help="UDP port of the ESP32-CAM ToF broadcasts")
     f.add_argument("--baud", type=int, default=921600)
     f.add_argument("--lidar", help="RPLidar serial port, e.g. /dev/ttyUSB0")
     f.add_argument("--xshut", help="ToF ring XSHUT GPIOs, e.g. D17,D27,D22,D23,D24,D25 (config range_sensor: tof_ring)")

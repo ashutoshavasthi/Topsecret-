@@ -86,11 +86,12 @@ class RealFlightRunner:
 
                 mode = self.brain.mode
                 if self.arm:
+                    v.keepalive()
                     v.send_obstacle_distance(body_ranges, body_angles, cfg.sensors.lidar_max_range)
                     if mode in (FlightMode.MISSION, FlightMode.RTL):
                         vz = float(np.clip(1.0 * (self.brain.altitude - tm.position[2]), -1.0, 1.0))
                         vel = np.array([out.setpoint.velocity[0], out.setpoint.velocity[1], vz])
-                        v.send_velocity_enu(vel, out.setpoint.yaw)
+                        v.send_velocity_enu(vel, out.setpoint.yaw, altitude=self.brain.altitude)
                     elif mode is FlightMode.LAND and not land_sent:
                         v.land()
                         land_sent = True
@@ -139,5 +140,12 @@ class RealFlightRunner:
         except KeyboardInterrupt:
             if self.arm:
                 v.land()
+                # Keep feeding the landing ramp (ESP-Drone) until it is down.
+                end = time.time() + 10.0
+                while time.time() < end and not v.poll().landed:
+                    v.keepalive()
+                    time.sleep(0.05)
         finally:
             self.rec.close()
+            if hasattr(v, "close"):
+                v.close()

@@ -18,7 +18,9 @@ jobs:
         run: python -m skymind sim --config config/default.yaml --out runs/ci-demo
       - name: Fly the micro drone indoor mission
         run: python -m skymind sim --config config/micro_indoor.yaml --out runs/ci-micro
-      - run: python -m skymind design config/micro.yaml config/micro_quiet.yaml config/default.yaml
+      - name: Fly the Nano (Rs 5,000) drone over a simulated lossy WiFi link
+        run: python -m skymind sim --config config/nano_room.yaml --out runs/ci-nano
+      - run: python -m skymind design config/nano.yaml config/micro_quiet.yaml config/default.yaml
       - uses: actions/upload-artifact@v4
         if: always()
         with:

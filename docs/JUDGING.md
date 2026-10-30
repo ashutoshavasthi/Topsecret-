@@ -51,6 +51,8 @@ Hard rules:
 3. `python -m skymind sim --config config/micro_indoor.yaml`: the ≈ $230, 240 g micro drone
    with cheap ToF sensors gets through a 1.4 m doorway in a lab. Show `skymind design` next to it
    to compare cost, weight, power and noise with the full-size build.
+   Then `python -m skymind sim --config config/nano_room.yaml`: the ₹5,000 build, whose brain runs
+   on a laptop over a simulated lossy WiFi link and still gets through a 1 m doorway.
 4. `python -m skymind sim --config config/windy_city.yaml`: strong gusty wind, a
    3 m alley between buildings that the mapper and A* planner find, and a wall that
    blocks the whole site, so the drone decides to climb over it.

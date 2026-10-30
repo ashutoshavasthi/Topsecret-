@@ -1,0 +1,86 @@
+# SkyMind Nano: the ~Rs 5,000 build. ESP32-S3 running ESP-Drone (on-board
+# self-balancing + optical-flow position hold), brushed 8520 coreless motors, 1S LiPo,
+# ESP32-CAM for video + 3 x VL53L0X. SkyMind's brain and the AI run on your laptop
+# over WiFi. Parts list and wiring: docs/BUDGET_BUILD.md
+# Hardware profile only -- scenarios include it with `base: nano.yaml`.
+
+vehicle:
+  mass: 0.080                 # kg all-up
+  arm_length: 0.06            # ~120 mm wheelbase
+  inertia: [0.00008, 0.00008, 0.00014]
+  max_motor_thrust: 0.40      # N, 8520 coreless + 65 mm props on 1S (~40 g each) -> T/W ~2
+  yaw_moment_coeff: 0.006
+  motor_time_constant: 0.05   # brushed motors spin up slower
+  linear_drag: 0.03
+  body_radius: 0.095          # prop tips
+  prop_diameter: 0.065
+  figure_of_merit: 0.4
+  drivetrain_efficiency: 0.5  # brushed motor + MOSFET driver
+  avionics_power: 1.7         # W: ESP32-S3 + ESP32-CAM streaming + sensors
+
+control:
+  max_tilt_deg: 20.0          # thrust/weight is only ~2: keep authority for altitude
+  max_horizontal_speed: 1.0
+  max_vertical_speed: 0.8
+
+sensors:
+  range_sensor: tof_ring
+  tof_headings_deg: [-35, 0, 35]   # 3 x VL53L0X, all looking forward-ish
+  tof_fov_deg: 25
+  lidar_max_range: 1.5        # VL53L0X long-range mode, indoors
+  lidar_noise_std: 0.02
+  tof_noise_frac: 0.04
+  lidar_rate_hz: 20
+  pos_noise_std: 0.10         # PMW3901 optical flow drifts
+  accel_noise_std: 0.12       # MPU6050 on a vibrating frame
+
+estimator:
+  pos_meas_std: 0.10
+
+avoidance:
+  safety_radius: 0.25
+  stop_distance: 0.30
+  lookahead: 1.2
+  max_decel: 2.0
+  max_accel: 1.5
+  reaction_time: 0.15         # WiFi round trip + processing, budgeted into every braking decision
+  map_resolution: 0.1
+  replan_interval: 1.0
+  path_lookahead: 2.0
+  max_heading_offset_deg: 30  # sensors only face forward: turn, then go
+
+camera:
+  width: 320                  # ESP32-CAM OV2640 at QVGA
+  height: 240
+  fov_deg: 66
+  fps: 10
+  device: "http://192.168.43.50:81/stream"   # MJPEG from the ESP32-CAM (see docs)
+  gimbal_stabilized: false
+  motion_blur_gain: 3.0
+
+vision:
+  detect_every: 1             # the laptop does the AI: no need to skip frames
+
+battery:
+  capacity_wh: 2.2            # 1S 600 mAh
+  cells: 1
+  specific_energy: 0.14
+  rtl_threshold: 0.25
+
+mission:
+  cruise_speed: 0.6
+  max_yaw_rate: 2.5
+  waypoint_radius: 0.35
+
+sim:
+  link_latency: 0.06          # one way; ~120 ms round trip over WiFi
+  link_drop_prob: 0.05        # 5 % of setpoint packets lost
+  link_timeout: 0.5
+
+judge:
+  thresholds:
+    min_clearance: [0.25, 0.10]
+    energy_per_km_wh: [12.0, 30.0]   # ideal: ~21 W hover / 0.6 m/s ~ 9.7 Wh/km
+    est_endurance_min: [5.0, 2.0]
+    mean_tip_speed: [65.0, 100.0]
+    rms_velocity_tracking_error: [0.15, 0.8]

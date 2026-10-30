@@ -4,6 +4,8 @@
     skymind judge   RUN_DIR [--config FILE]       re-score an existing run
     skymind analyze VIDEO [--out DIR]             AI analysis + quality scoring of any video
     skymind fly     --connect URL [--arm]         run on a real drone (bench mode unless --arm)
+    skymind design  CONFIG... [--sweep-battery]   compare builds: weight, power, endurance, noise
+    skymind bench   [--config FILE]               companion-computer CPU budget
 """
 
 from __future__ import annotations
@@ -105,7 +107,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 def cmd_fly(args: argparse.Namespace) -> int:
     from skymind.hal.mavlink_bridge import MavlinkVehicle
     from skymind.hal.real_flight import RealFlightRunner
-    from skymind.vision.camera import OpenCVCamera
+    from skymind.vision.camera import open_camera
 
     cfg = load_config(args.config)
     if args.arm and not args.yes:
@@ -114,12 +116,16 @@ def cmd_fly(args: argparse.Namespace) -> int:
             print("aborted")
             return 1
     vehicle = MavlinkVehicle(args.connect, args.baud)
-    if args.lidar:
+    if cfg.sensors.range_sensor == "tof_ring":
+        from skymind.hal.tof_ring import ToFRing
+
+        lidar = ToFRing(cfg.sensors, args.xshut.split(",") if args.xshut else None)
+    elif args.lidar:
         from skymind.hal.lidar_rplidar import RPLidarSource
 
         lidar = RPLidarSource(args.lidar, cfg.sensors.lidar_beams, cfg.sensors.lidar_max_range)
     else:
-        print("WARNING: no lidar configured -- obstacle avoidance is blind", file=sys.stderr)
+        print("WARNING: no range sensor configured -- obstacle avoidance is blind", file=sys.stderr)
         import numpy as np
 
         class _NoLidar:
@@ -129,10 +135,33 @@ def cmd_fly(args: argparse.Namespace) -> int:
                 return np.full(len(self.body_angles), cfg.sensors.lidar_max_range), self.body_angles
 
         lidar = _NoLidar()
-    camera = None if args.no_camera else OpenCVCamera(cfg.camera)
+    camera = None if args.no_camera else open_camera(cfg.camera)
     out = Path(args.out) if args.out else _default_out("flight")
     RealFlightRunner(cfg, vehicle, lidar, camera, out, arm=args.arm).run()
     print(f"log written to {out}; score it with: skymind judge {out}")
+    return 0
+
+
+def cmd_design(args: argparse.Namespace) -> int:
+    from skymind.design import evaluate, format_table, with_battery
+
+    cfgs = [(Path(c).stem, load_config(c)) for c in args.configs]
+    ref_cfg = load_config(args.reference) if args.reference else cfgs[0][1]
+    ref_tip = evaluate(ref_cfg).hover_tip_speed
+    reports = [evaluate(cfg, name, ref_tip) for name, cfg in cfgs]
+    if args.sweep_battery:
+        name, base = cfgs[0]
+        for wh in [float(x) for x in args.sweep_battery.split(",")]:
+            reports.append(evaluate(with_battery(base, wh), f"{name}@{wh:g}Wh", ref_tip))
+    print(format_table(reports))
+    print(f"\nnoise dB is relative to {'the reference' if args.reference else cfgs[0][0]} hovering (rotor tonal noise ~ 50 log10 tip speed)")
+    return 0
+
+
+def cmd_bench(args: argparse.Namespace) -> int:
+    from skymind.bench import format_bench, run_bench
+
+    print(format_bench(run_bench(load_config(args.config), args.iterations)))
     return 0
 
 
@@ -165,12 +194,23 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--connect", required=True, help="e.g. /dev/ttyAMA0, udp:127.0.0.1:14550")
     f.add_argument("--baud", type=int, default=921600)
     f.add_argument("--lidar", help="RPLidar serial port, e.g. /dev/ttyUSB0")
+    f.add_argument("--xshut", help="ToF ring XSHUT GPIOs, e.g. D17,D27,D22,D23,D24,D25 (config range_sensor: tof_ring)")
     f.add_argument("--config", default="config/default.yaml")
     f.add_argument("--out")
     f.add_argument("--no-camera", action="store_true")
     f.add_argument("--arm", action="store_true", help="actually arm and fly (default: bench/monitor only)")
     f.add_argument("--yes", action="store_true", help="skip the interactive arming confirmation")
     f.set_defaults(func=cmd_fly)
+    d = sub.add_parser("design", help="compare builds: weight, power, endurance, noise")
+    d.add_argument("configs", nargs="+")
+    d.add_argument("--reference", help="config whose hover noise is the 0 dB reference")
+    d.add_argument("--sweep-battery", help="comma-separated pack sizes in Wh for the first config")
+    d.set_defaults(func=cmd_design)
+
+    b = sub.add_parser("bench", help="measure companion-computer CPU load for a config")
+    b.add_argument("--config", default="config/default.yaml")
+    b.add_argument("--iterations", type=int, default=60)
+    b.set_defaults(func=cmd_bench)
     return p
 
 

@@ -31,3 +31,33 @@ class OpenCVCamera:
 
     def close(self) -> None:
         self.cap.release()
+
+
+class Picamera2Camera:
+    """Raspberry Pi CSI camera (Camera Module 3 / OV5647) via libcamera.
+
+    Use ``camera.device: picamera2`` in the config. Needs ``sudo apt install python3-picamera2``.
+    Capturing straight at the working resolution keeps the Pi Zero 2 W's CPU free.
+    """
+
+    def __init__(self, cfg: CameraConfig):
+        from picamera2 import Picamera2
+
+        self.cam = Picamera2()
+        conf = self.cam.create_video_configuration(
+            main={"size": (cfg.width, cfg.height), "format": "RGB888"}, controls={"FrameRate": float(cfg.fps)}
+        )
+        self.cam.configure(conf)
+        self.cam.start()
+
+    def read(self) -> np.ndarray | None:
+        return self.cam.capture_array()  # RGB888 in picamera2 is BGR byte order, as OpenCV expects
+
+    def close(self) -> None:
+        self.cam.stop()
+
+
+def open_camera(cfg: CameraConfig):
+    if cfg.device == "picamera2":
+        return Picamera2Camera(cfg)
+    return OpenCVCamera(cfg)

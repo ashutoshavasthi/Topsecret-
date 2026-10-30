@@ -24,6 +24,12 @@ class VehicleConfig:
     motor_time_constant: float = 0.03  # s
     linear_drag: float = 0.25  # N per m/s
     body_radius: float = 0.3  # m, used for collision checks
+    # Power / noise model (see skymind/power.py)
+    prop_diameter: float = 0.254  # m (10")
+    figure_of_merit: float = 0.6  # propeller hover efficiency
+    drivetrain_efficiency: float = 0.75  # motor x ESC
+    thrust_coefficient: float = 0.01  # C_T in T = C_T rho A (Omega R)^2
+    avionics_power: float = 7.0  # W: flight controller + companion computer + camera + sensors
 
 
 @dataclass
@@ -58,10 +64,15 @@ class SensorConfig:
     accel_noise_std: float = 0.05  # m/s^2
     pos_noise_std: float = 0.05  # m
     pos_rate_hz: float = 20.0
+    range_sensor: str = "lidar"  # "lidar" (360-degree scanner) or "tof_ring" (cheap VL53L1X cones)
     lidar_beams: int = 72
-    lidar_max_range: float = 8.0  # m
+    lidar_max_range: float = 8.0  # m (VL53L1X long mode: ~4 m indoors, ~2 m in sunlight)
     lidar_noise_std: float = 0.02  # m
     lidar_rate_hz: float = 20.0
+    tof_headings_deg: list[float] = field(default_factory=lambda: [-90.0, -30.0, 0.0, 30.0, 90.0, 180.0])
+    tof_fov_deg: float = 27.0
+    tof_subrays: int = 5  # sub-rays per cone used to represent each reading
+    tof_noise_frac: float = 0.02  # ToF error grows with distance
 
 
 @dataclass
@@ -83,6 +94,9 @@ class AvoidanceConfig:
     map_resolution: float = 0.25  # m per grid cell
     replan_interval: float = 1.0  # s
     path_lookahead: float = 5.0  # m, furthest path point handed to the reactive avoider
+    # With sparse sensors (ToF ring), slow down until the nose (best-covered sector) faces the
+    # direction of travel. None = move in any direction at full speed (360-degree lidar).
+    max_heading_offset_deg: float | None = None
 
 
 @dataclass
@@ -108,14 +122,17 @@ class VisionConfig:
             "yellow_marker": [[22, 140, 120], [34, 255, 255]],
         }
     )
+    onnx_input_size: int = 640  # 320 is ~4x cheaper (Pi Zero / Pi 4), at some loss on small objects
     min_blob_area: int = 12
     snapshot_on_detection: bool = True
+    detect_every: int = 1  # run the detectors on every Nth camera frame (CPU saving)
 
 
 @dataclass
 class BatteryConfig:
     capacity_wh: float = 40.0
-    power_coeff: float = 7.0  # W per N^1.5 of each motor thrust
+    cells: int = 4  # LiPo cells in series (3.7 V nominal each)
+    specific_energy: float = 0.15  # Wh per gram of pack (small packs ~0.13, large ~0.17)
     rtl_threshold: float = 0.2  # fraction remaining
 
 
@@ -130,6 +147,7 @@ class MissionConfig:
     geofence: tuple[float, float, float, float] = (-10.0, -15.0, 35.0, 15.0)  # xmin ymin xmax ymax
     max_altitude: float = 30.0
     blocked_timeout: float = 8.0
+    max_yaw_rate: float = 1.2  # rad/s
 
 
 @dataclass
@@ -146,7 +164,7 @@ class WorldConfig:
 @dataclass
 class JudgeConfig:
     weights: dict[str, float] = field(
-        default_factory=lambda: {"stability": 0.3, "navigation": 0.25, "safety": 0.3, "vision": 0.15}
+        default_factory=lambda: {"stability": 0.25, "navigation": 0.2, "safety": 0.3, "vision": 0.1, "efficiency": 0.15}
     )
     # [good, bad] thresholds; a metric scores 100 at "good" and 0 at "bad", linear between.
     thresholds: dict[str, list[float]] = field(
@@ -164,6 +182,9 @@ class JudgeConfig:
             "clipped_fraction": [0.0, 0.2],
             "detection_recall": [0.9, 0.2],
             "detection_precision": [0.9, 0.3],
+            "energy_per_km_wh": [20.0, 60.0],  # lower = more efficient
+            "est_endurance_min": [15.0, 5.0],  # at the flight's average power
+            "mean_tip_speed": [60.0, 110.0],  # m/s; slower rotor tips = quieter (stealthier)
         }
     )
     min_gt_area: int = 40  # px; ground-truth targets smaller than this are too far to count
@@ -204,16 +225,29 @@ def _merge(obj: Any, data: dict[str, Any], path: str = "") -> Any:
         else:
             if isinstance(current, tuple) and isinstance(value, list):
                 value = tuple(value)
+            elif isinstance(current, dict) and isinstance(value, dict):
+                value = {**current, **value}  # override individual entries, keep the rest
             setattr(obj, key, value)
     return obj
+
+
+def _apply_file(cfg: SkyMindConfig, path: Path, depth: int = 0) -> None:
+    """Merge a YAML file. ``base: other.yaml`` (relative to this file) is applied first,
+    so a scenario can build on a hardware profile such as ``micro.yaml``."""
+    if depth > 5:
+        raise RecursionError("config 'base' chain too deep")
+    with open(path, encoding="utf-8") as fh:
+        data = yaml.safe_load(fh) or {}
+    base = data.pop("base", None)
+    if base:
+        _apply_file(cfg, (path.parent / base).resolve(), depth + 1)
+    _merge(cfg, data)
 
 
 def load_config(path: str | Path | None = None, overrides: dict[str, Any] | None = None) -> SkyMindConfig:
     cfg = SkyMindConfig()
     if path is not None:
-        with open(path, encoding="utf-8") as fh:
-            data = yaml.safe_load(fh) or {}
-        _merge(cfg, data)
+        _apply_file(cfg, Path(path))
     if overrides:
         _merge(cfg, overrides)
     return cfg

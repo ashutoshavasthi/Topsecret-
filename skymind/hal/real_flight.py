@@ -19,7 +19,7 @@ from skymind.control.estimator import StateEstimate
 from skymind.hal.mavlink_bridge import MavlinkVehicle
 from skymind.math3d import quat_from_euler
 from skymind.mission import FlightBrain, FlightMode
-from skymind.vision.analyzer import FrameAnalyzer, draw_overlay
+from skymind.vision.analyzer import FrameAnalysis, FrameAnalyzer, draw_overlay
 from skymind.vision.recorder import FlightRecorder
 
 
@@ -64,6 +64,8 @@ class RealFlightRunner:
         land_sent = False
         last_labels: set[str] = set()
         last_snap_t = -1e9
+        cam_frames = 0
+        last_analysis = FrameAnalysis()
         try:
             while True:
                 loop_start = time.time()
@@ -114,16 +116,21 @@ class RealFlightRunner:
                 if self.camera is not None and k % cam_every == 0:
                     frame = self.camera.read()
                     if frame is not None:
-                        analysis = self.analyzer.analyze(frame)
+                        analyse_now = cam_frames % max(1, cfg.vision.detect_every) == 0
+                        cam_frames += 1
+                        if analyse_now:
+                            last_analysis = self.analyzer.analyze(frame)
+                        analysis = last_analysis
                         hud = [f"t {t:5.1f}s {mode.value.upper()}", f"alt {tm.position[2]:4.1f}m bat {tm.battery_fraction * 100:3.0f}%"]
                         self.rec.write_frame(draw_overlay(frame, analysis, hud))
                         labels = {d.label for d in analysis.detections}
                         snap = None
-                        if labels and self.cfg.vision.snapshot_on_detection and (labels != last_labels or t - last_snap_t > 3.0):
+                        if analyse_now and labels and self.cfg.vision.snapshot_on_detection and (labels != last_labels or t - last_snap_t > 3.0):
                             snap = self.rec.snapshot(frame, t, list(labels))
                             last_snap_t = t
                         last_labels = labels
-                        self.rec.log_record({"type": "vision", "t": t, **analysis.to_dict(), "snapshot": snap})
+                        if analyse_now:
+                            self.rec.log_record({"type": "vision", "t": t, **analysis.to_dict(), "snapshot": snap})
 
                 if mode in (FlightMode.LANDED, FlightMode.CRASHED) or (not self.arm and t > cfg.mission.max_duration):
                     break

@@ -26,6 +26,10 @@ class OccupancyGrid:
         self.nx = int(math.ceil((xmax - xmin + 2 * margin) / resolution))
         self.ny = int(math.ceil((ymax - ymin + 2 * margin) / resolution))
         self.log_odds = np.zeros((self.ny, self.nx), np.float32)
+        # Cells outside the geofence are permanently blocked for planning.
+        xs = self.x0 + (np.arange(self.nx) + 0.5) * resolution
+        ys = self.y0 + (np.arange(self.ny) + 0.5) * resolution
+        self.outside = ~((ys[:, None] >= ymin) & (ys[:, None] <= ymax) & (xs[None, :] >= xmin) & (xs[None, :] <= xmax))
         self.l_occ, self.l_free, self.l_min, self.l_max = 0.85, -0.4, -2.0, 3.5
 
     def reset(self) -> None:
@@ -61,7 +65,7 @@ class OccupancyGrid:
         np.clip(self.log_odds, self.l_min, self.l_max, out=self.log_odds)
 
     def obstacle_mask(self, inflate: float) -> np.ndarray:
-        occ = (self.log_odds > 0.6).astype(np.uint8)
+        occ = ((self.log_odds > 0.6) | self.outside).astype(np.uint8)
         k = max(1, int(math.ceil(inflate / self.res)))
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k + 1, 2 * k + 1))
         return cv2.dilate(occ, kernel).astype(bool)

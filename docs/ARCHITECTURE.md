@@ -41,7 +41,10 @@
 | `skymind/sim/` | Rigid-body quadrotor with motor lag, drag and wind. Ray-cast world, 2D lidar, synthetic camera with ground-truth boxes |
 | `skymind/vision/` | Detection back-ends, image-quality metrics, recorder, real camera input, offline video analysis |
 | `skymind/evaluation/` | Flight judge and report plots |
-| `skymind/hal/` | MAVLink bridge (ENU↔NED, velocity setpoints, OBSTACLE_DISTANCE forwarding), RPLidar driver, real-flight runner |
+| `skymind/perception/range_sensors.py` | Sensor layouts: 360° lidar, or a ring of ToF cones expanded into conservative sub-rays |
+| `skymind/power.py` | Momentum-theory electrical power, endurance and rotor tip speed (noise proxy) |
+| `skymind/design.py`, `skymind/bench.py` | Build comparison calculator and onboard CPU benchmark |
+| `skymind/hal/` | MAVLink bridge (ENU↔NED, velocity setpoints, OBSTACLE_DISTANCE forwarding), RPLidar and VL53L1X ToF-ring drivers, Pi camera, real-flight runner |
 
 ## Key design decisions
 
@@ -72,6 +75,17 @@ jerk-limited second-order reference model. Its acceleration feeds the
 controller as feed-forward, so the drone tracks closely without lag (which
 matters for safety) and the footage stays steady (which matters for the
 vision score).
+
+**Cheap sparse sensing.** A ToF cone only reports the nearest return somewhere in
+27°, so each reading is spread across the cone (conservative). Directions between cones
+are *unknown*, not free. The avoider only picks observed headings, and the brain
+turns to face a target before flying toward it (turn-then-go). The map and A* planner
+treat everything outside the geofence as solid, so they never route around a wall through it.
+
+**Efficiency by design.** Power and noise are dominated by weight and prop size,
+so they are handled at design time (`skymind design`) rather than by flying style. On the
+software side, the expensive steps (detection, A* replanning) run at configurable lower rates
+(`vision.detect_every`, `avoidance.replan_interval`), and `skymind bench` checks the budget on the target board.
 
 **Same brain in sim and reality.** `FlightBrain` only consumes a state
 estimate, lidar ranges and battery level, and only emits setpoints. The sim

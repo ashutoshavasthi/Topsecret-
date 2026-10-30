@@ -51,3 +51,13 @@ def test_vision_recall_and_precision():
     m = {x.name: x.value for x in vision.metrics}
     assert m["detection_recall"] == 0.5
     assert m["detection_precision"] == 0.5
+
+
+def test_efficiency_category():
+    mission = {**MISSION, "energy_per_km_wh": 20.0, "energy_wh": 0.2, "est_endurance_min": 15.0, "avg_power_w": 130.0}
+    states = [_state(t * 0.1, tip_speed=60.0) for t in range(100)]
+    card = FlightJudge().judge(states, mission)
+    eff = next(c for c in card.categories if c.name == "efficiency")
+    assert eff.score == 100.0
+    loud = FlightJudge().judge([_state(t * 0.1, tip_speed=110.0) for t in range(100)], mission)
+    assert next(c for c in loud.categories if c.name == "efficiency").score < eff.score

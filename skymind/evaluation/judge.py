@@ -6,6 +6,7 @@ Turns a flight log (and, optionally, the mission summary) into a scorecard:
     navigation  did it get where it was told to, efficiently
     safety      collisions, closest approach to obstacles, failsafes
     vision      footage quality and how reliably the AI found the targets
+    efficiency  energy per km, endurance, and rotor tip speed (noise / stealth)
 
 Each metric is mapped linearly from a "good" value (100 points) to a "bad"
 value (0 points). Category scores are the mean of their metrics and the
@@ -214,6 +215,19 @@ class FlightJudge:
         metrics.append(Metric("detections_logged", detected, 100.0 if detected else 0.0, note="total boxes over the flight"))
         return self._category("vision", metrics)
 
+    def efficiency(self, states: list[dict], mission: dict | None) -> Category:
+        metrics: list[Metric] = []
+        if mission and mission.get("energy_per_km_wh", -1) > 0:
+            metrics.append(self._metric("energy_per_km_wh", mission["energy_per_km_wh"], "Wh/km", f"{mission['energy_wh']:.2f} Wh used"))
+        if mission and mission.get("est_endurance_min"):
+            metrics.append(
+                self._metric("est_endurance_min", mission["est_endurance_min"], "min", f"avg {mission['avg_power_w']:.0f} W")
+            )
+        tips = [s["tip_speed"] for s in states if s.get("tip_speed") and s["pos"][2] > 0.3]
+        if tips:
+            metrics.append(self._metric("mean_tip_speed", float(np.mean(tips)), "m/s", "rotor noise proxy: lower = quieter"))
+        return self._category("efficiency", metrics)
+
     def _category(self, name: str, metrics: list[Metric]) -> Category:
         score = float(np.mean([m.score for m in metrics])) if metrics else 0.0
         return Category(name, round(score, 2), float(self.cfg.weights.get(name, 0.0)), metrics)
@@ -223,7 +237,7 @@ class FlightJudge:
         states = [r for r in records if r.get("type") == "state"]
         frames = [r for r in records if r.get("type") == "vision"]
         safety, collisions = self.safety(states, mission)
-        cats = [self.stability(states), self.navigation(states, mission), safety, self.vision(frames)]
+        cats = [self.stability(states), self.navigation(states, mission), safety, self.vision(frames), self.efficiency(states, mission)]
         weights = sum(c.weight for c in cats if c.metrics) or 1.0
         overall = sum(c.score * c.weight for c in cats if c.metrics) / weights
         verdict = "PASS"

@@ -19,10 +19,11 @@ and can be tuned to the competition's rules.
 
 | Category | Weight | Metrics (good → bad) |
 |---|---:|---|
-| **Stability** (self-balancing) | 0.30 | RMS roll+pitch rate (0.2 → 1.5 rad/s), max tilt (20° → 45°), attitude-estimate error vs truth (1° → 6°, sim only), RMS altitude error (0.1 → 0.8 m), velocity tracking error (0.2 → 1.5 m/s) |
-| **Navigation** | 0.25 | Waypoints reached (100 % → 0 %), path efficiency = straight-line / flown (0.85 → 0.4) |
+| **Stability** (self-balancing) | 0.25 | RMS roll+pitch rate (0.2 → 1.5 rad/s), max tilt (20° → 45°), attitude-estimate error vs truth (1° → 6°, sim only), RMS altitude error (0.1 → 0.8 m), velocity tracking error (0.2 → 1.5 m/s) |
+| **Navigation** | 0.20 | Waypoints reached (100 % → 0 %), path efficiency = straight-line / flown (0.85 → 0.4) |
 | **Safety** (obstacle avoidance) | 0.30 | Collisions (any = 0 points), closest approach to an obstacle (0.8 → 0.3 m from the vehicle centre), failsafes triggered, safe landing |
-| **Vision** (camera + AI) | 0.15 | Median sharpness (var. of Laplacian), exposure error, clipped pixels, detection recall and precision against ground truth (sim) |
+| **Vision** (camera + AI) | 0.10 | Median sharpness (var. of Laplacian), exposure error, clipped pixels, detection recall and precision against ground truth (sim) |
+| **Efficiency & stealth** | 0.15 | Energy per km (20 → 60 Wh/km; micro 10 → 25), endurance at the flight's average power (15 → 5 min; micro 9 → 3), mean rotor tip speed as a noise proxy (60 → 110 m/s; micro 75 → 115) |
 
 Hard rules:
 
@@ -47,9 +48,12 @@ Hard rules:
 1. `python -m pytest -q`: shows the safety-critical behaviour under test
    (tilt recovery, disturbance rejection, narrow-gap rejection, low-battery RTL, climbing a wall, …).
 2. `python -m skymind sim`: the forest mission. Open `flight_map.png` and `flight.mp4`.
-3. `python -m skymind sim --config config/windy_city.yaml`: strong gusty wind, a
+3. `python -m skymind sim --config config/micro_indoor.yaml`: the ≈ $230, 240 g micro drone
+   with cheap ToF sensors gets through a 1.4 m doorway in a lab. Show `skymind design` next to it
+   to compare cost, weight, power and noise with the full-size build.
+4. `python -m skymind sim --config config/windy_city.yaml`: strong gusty wind, a
    3 m alley between buildings that the mapper and A* planner find, and a wall that
    blocks the whole site, so the drone decides to climb over it.
-4. Open `report.md` and walk through the scorecard.
-5. (Hardware) Bench run with props off: move a board around the lidar and show the
+5. Open `report.md` and walk through the scorecard.
+6. (Hardware) Bench run with props off: move a board around the lidar and show the
    avoidance mode change in the recorded HUD.

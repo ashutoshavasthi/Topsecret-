@@ -1,0 +1,72 @@
+# SkyMind Micro: small, quiet, cheap (~$200) sub-250 g 3.5" quad for college projects.
+# Hardware profile only -- scenarios include it with `base: micro.yaml`.
+# Parts list and wiring: docs/MICRO_BUILD.md
+
+vehicle:
+  mass: 0.235                 # kg all-up, including a 4S 650 mAh pack
+  arm_length: 0.075           # 150 mm wheelbase
+  inertia: [0.0003, 0.0003, 0.00055]
+  max_motor_thrust: 2.6       # N, 1404 3800 KV + 3.5" bi-blade on 4S  (thrust/weight ~4.5)
+  yaw_moment_coeff: 0.008
+  motor_time_constant: 0.02
+  linear_drag: 0.08
+  body_radius: 0.12           # prop tips
+  prop_diameter: 0.089        # 3.5"
+  figure_of_merit: 0.45       # small props are less efficient than 10" ones
+  drivetrain_efficiency: 0.65
+  avionics_power: 2.5         # W: F405 FC + Pi Zero 2 W + camera + 6 ToF sensors
+
+control:
+  max_tilt_deg: 30.0
+  max_horizontal_speed: 2.5
+
+sensors:
+  range_sensor: tof_ring      # 6 x VL53L1X instead of a 170 g, $100 lidar
+  tof_headings_deg: [-90, -30, 0, 30, 90, 180]
+  tof_fov_deg: 27
+  lidar_max_range: 3.5        # m, indoor long-distance mode
+  lidar_rate_hz: 20
+  pos_noise_std: 0.08         # optical flow + ToF height (MATEK 3901-L0X) drifts more than RTK
+  accel_noise_std: 0.08
+
+estimator:
+  pos_meas_std: 0.08
+
+avoidance:
+  safety_radius: 0.35
+  stop_distance: 0.45
+  lookahead: 2.0
+  max_decel: 3.0
+  max_accel: 2.0
+  map_resolution: 0.15
+  replan_interval: 1.5        # cheaper replanning for the Pi Zero 2 W
+  path_lookahead: 3.0
+  max_heading_offset_deg: 35  # turn to face travel before moving fast (sensors are densest ahead)
+
+camera:
+  width: 320
+  height: 240
+  fov_deg: 100
+  fps: 10
+  device: picamera2          # CSI camera on the Pi Zero 2 W (simulator ignores this)
+  gimbal_stabilized: false    # no room for a gimbal on a micro; footage shows the tilt
+  motion_blur_gain: 3.0
+
+vision:
+  detect_every: 2             # run detection on every 2nd frame to save CPU on the Pi Zero
+
+battery:
+  capacity_wh: 9.6            # 4S 650 mAh (~75 g)
+  cells: 4
+  specific_energy: 0.13
+  rtl_threshold: 0.25
+
+mission:
+  max_yaw_rate: 3.0           # small craft yaw quickly
+
+judge:
+  thresholds:
+    min_clearance: [0.35, 0.12]
+    energy_per_km_wh: [10.0, 25.0]   # ideal: hover power / cruise speed ~ 9.4 Wh/km at 1.5 m/s
+    est_endurance_min: [9.0, 3.0]
+    mean_tip_speed: [75.0, 115.0]

@@ -103,14 +103,14 @@ class ColorTargetDetector:
 
 
 class OnnxYoloDetector:
-    """YOLOv8 ONNX (exported with ``yolo export format=onnx``), 640x640 input."""
+    """YOLOv8 ONNX (exported with ``yolo export format=onnx imgsz=N``), NxN input."""
 
-    def __init__(self, model_path: str, labels: list[str], conf_threshold: float = 0.4, nms_threshold: float = 0.45):
+    def __init__(self, model_path: str, labels: list[str], conf_threshold: float = 0.4, nms_threshold: float = 0.45, input_size: int = 640):
         self.net = cv2.dnn.readNetFromONNX(model_path)
         self.labels = labels
         self.conf = conf_threshold
         self.nms = nms_threshold
-        self.size = 640
+        self.size = input_size  # must match the size the model was exported with
 
     def detect(self, frame: np.ndarray) -> list[Detection]:
         h, w = frame.shape[:2]
@@ -141,7 +141,9 @@ class FrameAnalyzer:
         if cfg.onnx_model:
             if not Path(cfg.onnx_model).exists():
                 raise FileNotFoundError(f"ONNX model not found: {cfg.onnx_model}")
-            self.detectors.append(OnnxYoloDetector(cfg.onnx_model, cfg.onnx_labels, cfg.onnx_conf_threshold))
+            self.detectors.append(
+                OnnxYoloDetector(cfg.onnx_model, cfg.onnx_labels, cfg.onnx_conf_threshold, input_size=cfg.onnx_input_size)
+            )
 
     def analyze(self, frame: np.ndarray) -> FrameAnalysis:
         dets: list[Detection] = []

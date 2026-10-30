@@ -21,11 +21,12 @@ from skymind.control.flight_controller import FlightController, Setpoint
 from skymind.math3d import wrap_angle
 from skymind.perception.avoidance import AvoidanceCommand, AvoidMode, ObstacleAvoider
 from skymind.perception.mapping import GlobalPlanner
+from skymind.power import PowerModel
 from skymind.sim.camera_sim import SimCamera
 from skymind.sim.lidar import SimLidar
 from skymind.sim.physics import QuadrotorSim
 from skymind.sim.world import World
-from skymind.vision.analyzer import FrameAnalyzer, draw_overlay
+from skymind.vision.analyzer import FrameAnalysis, FrameAnalyzer, draw_overlay
 from skymind.vision.recorder import FlightRecorder
 
 
@@ -47,16 +48,17 @@ class FlightMode(str, Enum):
 @dataclass
 class Battery:
     capacity_wh: float
-    power_coeff: float
+    model: PowerModel
     energy_wh: float = field(init=False)
+    last_power: float = field(init=False, default=0.0)
 
     def __post_init__(self) -> None:
         self.energy_wh = self.capacity_wh
 
     def drain(self, motor_thrust: np.ndarray, dt: float) -> float:
-        power = self.power_coeff * float(np.sum(np.maximum(motor_thrust, 0.0) ** 1.5))
-        self.energy_wh = max(0.0, self.energy_wh - power * dt / 3600.0)
-        return power
+        self.last_power = self.model.electrical_power(motor_thrust)
+        self.energy_wh = max(0.0, self.energy_wh - self.last_power * dt / 3600.0)
+        return self.last_power
 
     @property
     def fraction(self) -> float:
@@ -88,6 +90,7 @@ class FlightBrain:
         self.failsafe: str | None = None
         self.vel_cmd = np.zeros(2)
         self.acc_ff = np.zeros(2)
+        self.cruise_speed = m.cruise_speed
         self.best_goal_dist = float("inf")
         self.no_progress_time = 0.0
         a = cfg.avoidance
@@ -137,6 +140,14 @@ class FlightBrain:
             tx = np.where(c > 1e-9, (xmax - position[0]) / c, np.where(c < -1e-9, (xmin - position[0]) / c, np.inf))
             ty = np.where(s > 1e-9, (ymax - position[1]) / s, np.where(s < -1e-9, (ymin - position[1]) / s, np.inf))
         return np.clip(np.minimum(tx, ty), 0.0, max_range)
+
+    def _observed_headings(self, yaw: float) -> np.ndarray:
+        """Which avoider headings fall inside a range-sensor cone right now."""
+        sens = self.cfg.sensors
+        heads = yaw + np.radians(np.asarray(sens.tof_headings_deg, dtype=float))
+        half = math.radians(sens.tof_fov_deg) / 2.0
+        diff = np.abs(wrap_angle(self.avoider.headings[:, None] - heads[None, :]))
+        return (diff <= half).any(axis=1)
 
     def _govern(self, cmd: np.ndarray, vel: np.ndarray, ranges: np.ndarray, angles: np.ndarray) -> np.ndarray:
         """Safety governor, applied after smoothing and never slew-limited.
@@ -206,7 +217,15 @@ class FlightBrain:
                         steer = steer / max(np.linalg.norm(steer), 1e-6) * max(np.linalg.norm(steer), m.cruise_speed * 2.0)
             if self.failsafe != "geofence":  # when already outside, let RTL fly back in
                 ranges = np.minimum(ranges, self.fence_ranges(pos, angles, self.avoider.max_range))
-            avoid = self.avoider.plan(ranges, angles, steer, m.cruise_speed)
+            observed = None
+            turning = False
+            a = self.cfg.avoidance
+            if a.max_heading_offset_deg is not None:
+                observed = self._observed_headings(est.euler[2])
+                steer_heading = math.atan2(steer[1], steer[0])
+                # Turn-then-go: target out of the sensors' view -> rotate in place first.
+                turning = abs(float(wrap_angle(steer_heading - est.euler[2]))) > math.radians(a.max_heading_offset_deg)
+            avoid = self.avoider.plan(ranges, angles, steer, 0.0 if turning else self.cruise_speed, observed)
             # Stuck = no safe heading, or no progress toward the goal for a while (e.g. sliding
             # along a long wall). Either way, try climbing over the obstacle.
             if dist < self.best_goal_dist - 1.0:
@@ -224,12 +243,18 @@ class FlightBrain:
                     self.planner.reset()  # obstacles lower than the new altitude no longer matter
                     self.replan_timer = 0.0
                 events.append(f"blocked: climbing to {self.altitude:.1f} m")
+            desired = avoid.velocity_xy
+            if a.max_heading_offset_deg is not None and np.linalg.norm(desired) > 0.2:
+                # Sparse sensors see best straight ahead: crawl until the nose points where we go.
+                off = abs(float(wrap_angle(math.atan2(desired[1], desired[0]) - est.euler[2])))
+                lim = math.radians(a.max_heading_offset_deg)
+                if off > lim:
+                    desired = desired * max(0.15, 1.0 - (off - lim) / (math.pi / 2))
             # Jerk-limited reference model; allow harder manoeuvres when something is close.
-            a = self.cfg.avoidance
             urgent = avoid.mode is AvoidMode.BLOCKED or avoid.min_range < a.stop_distance + 0.5
             a_max = a.max_accel * (2.0 if urgent else 1.0)
             j_max = a.max_jerk * (3.0 if urgent else 1.0)
-            acc_des = _clip_norm(a.ref_gain * (avoid.velocity_xy - self.vel_cmd), a_max)
+            acc_des = _clip_norm(a.ref_gain * (desired - self.vel_cmd), a_max)
             self.acc_ff = self.acc_ff + _clip_norm(acc_des - self.acc_ff, j_max * dt)
             prev_cmd = self.vel_cmd
             self.vel_cmd = self._govern(prev_cmd + self.acc_ff * dt, est.velocity[:2], ranges, angles)
@@ -239,12 +264,18 @@ class FlightBrain:
             sp.position = np.array([np.nan, np.nan, self.altitude])
             sp.velocity = np.array([self.vel_cmd[0], self.vel_cmd[1], 0.0])
             sp.acceleration = np.array([self.acc_ff[0], self.acc_ff[1], 0.0])
-            speed = float(np.linalg.norm(self.vel_cmd))
-            if speed > 0.3:
-                # Point the camera where we're going, rate-limited for smooth footage.
-                target_yaw = math.atan2(self.vel_cmd[1], self.vel_cmd[0])
+            # Point the camera (and, with a ToF ring, the best sensors) where we're going.
+            if turning:
+                face = steer
+            elif a.max_heading_offset_deg is not None:
+                face = avoid.velocity_xy
+            else:
+                face = self.vel_cmd
+            if float(np.linalg.norm(face)) > 0.2:
+                target_yaw = math.atan2(face[1], face[0])
                 err = float(wrap_angle(target_yaw - self.yaw_sp))
-                self.yaw_sp = float(wrap_angle(self.yaw_sp + np.clip(err, -1.2 * dt, 1.2 * dt)))
+                step = m.max_yaw_rate * dt
+                self.yaw_sp = float(wrap_angle(self.yaw_sp + np.clip(err, -step, step)))
             sp.yaw = self.yaw_sp
 
         if self.mode is FlightMode.LAND:
@@ -272,6 +303,12 @@ class MissionResult:
     collisions: int
     min_clearance: float
     battery_used: float
+    energy_wh: float
+    avg_power_w: float
+    energy_per_km_wh: float
+    est_endurance_min: float  # at this flight's average power, down to the RTL reserve
+    hover_power_w: float
+    mean_tip_speed: float  # m/s, rotor-noise proxy
     frames_recorded: int
     snapshots: int
     run_dir: str
@@ -296,7 +333,8 @@ class SimulationRunner:
         self.camera = SimCamera(cfg.camera, self.world, self.rng)
         self.analyzer = FrameAnalyzer(cfg.vision)
         self.brain = FlightBrain(cfg, cfg.sensors.lidar_max_range)
-        self.battery = Battery(cfg.battery.capacity_wh, cfg.battery.power_coeff)
+        self.power = PowerModel(cfg.vehicle)
+        self.battery = Battery(cfg.battery.capacity_wh, self.power)
         self.record_video = record_video
 
     def _log(self, msg: str) -> None:
@@ -330,6 +368,10 @@ class SimulationRunner:
         last_snapshot_t = -1e9
         last_labels: set[str] = set()
         prev_pos = self.sim.state.position.copy()
+        airborne_time = 0.0
+        tip_speeds: list[float] = []
+        cam_frame = 0
+        last_analysis = FrameAnalysis()
         t = 0.0
         wall0 = time.time()
         hard_stop = cfg.mission.max_duration + 60.0
@@ -361,6 +403,10 @@ class SimulationRunner:
 
                 self.sim.step(out.motors, dt, self.world.wind_at(self.rng))
                 self.battery.drain(self.sim.state.motor_thrust, dt)
+                if not self.sim.on_ground:
+                    airborne_time += dt
+                    if k % log_every == 0:
+                        tip_speeds.append(self.power.tip_speed(self.sim.state.motor_thrust))
                 t += dt
                 k += 1
 
@@ -398,6 +444,8 @@ class SimulationRunner:
                             "vel_sp": out.velocity_target,
                             "motors": self.sim.state.motor_thrust,
                             "battery": self.battery.fraction,
+                            "power": self.battery.last_power,
+                            "tip_speed": self.power.tip_speed(self.sim.state.motor_thrust),
                             "min_range": float(ranges.min()),
                             "clearance": clear,
                             "avoid": brain_out.avoidance.mode.value if brain_out and brain_out.avoidance else None,
@@ -408,28 +456,33 @@ class SimulationRunner:
                 if k % cam_every == 0 and pos[2] > 0.2:
                     roll, pitch, yaw = self.sim.state.euler
                     frame, gt = self.camera.render(pos, yaw, roll, pitch, self.sim.state.omega)
-                    analysis = self.analyzer.analyze(frame)
+                    analyse_now = cam_frame % max(1, cfg.vision.detect_every) == 0
+                    cam_frame += 1
+                    if analyse_now:
+                        last_analysis = self.analyzer.analyze(frame)
+                    analysis = last_analysis
                     labels = {d.label for d in analysis.detections}
                     snap = None
-                    if cfg.vision.snapshot_on_detection and labels and (labels != last_labels or t - last_snapshot_t > 3.0):
+                    if analyse_now and cfg.vision.snapshot_on_detection and labels and (labels != last_labels or t - last_snapshot_t > 3.0):
                         snap = rec.snapshot(frame, t, list(labels))
                         last_snapshot_t = t
                     last_labels = labels
                     hud = [
                         f"t {t:5.1f}s  {self.brain.mode.value.upper()}",
                         f"alt {pos[2]:4.1f}m  v {np.linalg.norm(self.sim.state.velocity):3.1f}m/s",
-                        f"bat {self.battery.fraction * 100:3.0f}%  lidar {ranges.min():3.1f}m",
+                        f"bat {self.battery.fraction * 100:3.0f}%  {self.battery.last_power:3.0f}W  obst {ranges.min():3.1f}m",
                     ]
                     rec.write_frame(draw_overlay(frame, analysis, hud))
-                    rec.log_record(
-                        {
-                            "type": "vision",
-                            "t": t,
-                            **analysis.to_dict(),
-                            "ground_truth": [{"label": g.label, "bbox": g.bbox, "distance": g.distance} for g in gt],
-                            "snapshot": snap,
-                        }
-                    )
+                    if analyse_now:
+                        rec.log_record(
+                            {
+                                "type": "vision",
+                                "t": t,
+                                **analysis.to_dict(),
+                                "ground_truth": [{"label": g.label, "bbox": g.bbox, "distance": g.distance} for g in gt],
+                                "snapshot": snap,
+                            }
+                        )
 
                 if self.brain.mode in (FlightMode.LANDED, FlightMode.CRASHED):
                     # Let the log capture the final state, then stop.
@@ -438,6 +491,8 @@ class SimulationRunner:
             rec.close()
 
         status = self.brain.mode.value
+        energy = self.battery.capacity_wh - self.battery.energy_wh
+        avg_power = energy * 3600.0 / max(airborne_time, 1e-6)
         straight = 0.0
         pts = [self.brain.home] + self.brain.waypoints + [self.brain.home]
         for a, b in zip(pts[:-1], pts[1:]):
@@ -453,6 +508,12 @@ class SimulationRunner:
             collisions=collisions,
             min_clearance=round(min_clear, 3) if min_clear < 1e8 else -1.0,
             battery_used=round(1.0 - self.battery.fraction, 4),
+            energy_wh=round(energy, 3),
+            avg_power_w=round(avg_power, 1),
+            energy_per_km_wh=round(energy / max(distance / 1000.0, 1e-6), 2) if distance > 1.0 else -1.0,
+            est_endurance_min=round(60.0 * cfg.battery.capacity_wh * (1.0 - cfg.battery.rtl_threshold) / max(avg_power, 1e-6), 1),
+            hover_power_w=round(self.power.hover_power(), 1),
+            mean_tip_speed=round(float(np.mean(tip_speeds)) if tip_speeds else 0.0, 1),
             frames_recorded=rec.frames,
             snapshots=rec.snapshots,
             run_dir=str(self.run_dir),

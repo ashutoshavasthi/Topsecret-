@@ -16,8 +16,11 @@ jobs:
       - run: python -m pytest -q
       - name: Fly the demo mission and judge it
         run: python -m skymind sim --config config/default.yaml --out runs/ci-demo
+      - name: Fly the micro drone indoor mission
+        run: python -m skymind sim --config config/micro_indoor.yaml --out runs/ci-micro
+      - run: python -m skymind design config/micro.yaml config/micro_quiet.yaml config/default.yaml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: demo-flight
-          path: runs/ci-demo
+          name: demo-flights
+          path: runs/

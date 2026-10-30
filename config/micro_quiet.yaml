@@ -1,0 +1,16 @@
+# SkyMind Micro "Quiet": the stealth variant. A 4" frame with larger, slower props
+# and a smaller pack. Still under 250 g, about 3 dB quieter than the 3.5" build
+# (`skymind design config/micro.yaml config/micro_quiet.yaml`), trading ~1 min of flight time.
+base: micro.yaml
+
+vehicle:
+  mass: 0.240
+  arm_length: 0.088            # 4" frame, ~175 mm wheelbase
+  inertia: [0.00036, 0.00036, 0.00065]
+  max_motor_thrust: 2.6        # 1404 2750 KV + 4" bi-blade on 4S: same thrust at lower RPM
+  body_radius: 0.14
+  prop_diameter: 0.1016        # 4"
+  figure_of_merit: 0.5         # bigger props are more efficient too
+
+battery:
+  capacity_wh: 8.1             # 4S 550 mAh (~62 g)

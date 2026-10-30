@@ -67,7 +67,16 @@ class ObstacleAvoider:
         hit = np.where(blocking, np.maximum(hit, 0.0), self.max_range)
         return hit.min(axis=1)
 
-    def plan(self, ranges: np.ndarray, angles: np.ndarray, to_goal: np.ndarray, cruise_speed: float) -> AvoidanceCommand:
+    def plan(
+        self,
+        ranges: np.ndarray,
+        angles: np.ndarray,
+        to_goal: np.ndarray,
+        cruise_speed: float,
+        observed: np.ndarray | None = None,
+    ) -> AvoidanceCommand:
+        """``observed`` masks ``self.headings`` that the sensors can actually see. Unobserved
+        headings are never chosen: with sparse sensors an empty direction is unknown, not free."""
         cfg = self.cfg
         dist_goal = float(np.linalg.norm(to_goal))
         goal_heading = math.atan2(to_goal[1], to_goal[0]) if dist_goal > 1e-6 else (self.prev_heading or 0.0)
@@ -75,6 +84,11 @@ class ObstacleAvoider:
 
         clear = self.corridor_clearance(ranges, angles)
         goal_clear = float(self.corridor_clearance(ranges, angles, np.array([goal_heading]))[0])
+        if observed is not None:
+            clear = np.where(observed, clear, 0.0)
+            gi = int(np.argmin(np.abs(wrap_angle(self.headings - goal_heading))))
+            if not observed[gi]:
+                goal_clear = 0.0
         need = min(cfg.lookahead, dist_goal + cfg.safety_radius)
 
         if goal_clear >= need:

@@ -1,0 +1,27 @@
+# Harder scenario: gusty wind between buildings, a narrow alley and a low wall
+# that can only be passed by climbing over it.
+mission:
+  cruise_altitude: 2.5
+  cruise_speed: 2.0
+  waypoints:
+    - [18.0, 6.0]
+    - [28.0, -4.0]
+  geofence: [-6.0, -12.0, 34.0, 12.0]
+  max_duration: 180.0
+  blocked_timeout: 5.0
+
+world:
+  cylinders:
+    - [4.0, 1.0, 0.25, 8.0]    # lamp posts
+    - [4.0, -1.5, 0.25, 8.0]
+    - [24.0, 2.0, 0.6, 6.0]
+  boxes:
+    - [7.0, 3.5, 12.0, 12.0, 15.0]     # building north
+    - [7.0, -12.0, 12.0, 0.5, 15.0]    # building south (3 m alley at y 0.5..3.5)
+    - [20.0, -12.0, 21.0, 12.0, 3.5]   # low wall across the whole site
+  targets:
+    - [15.0, 9.0, 1.5, 0.4, red_marker]
+    - [26.0, 6.0, 3.0, 0.4, yellow_marker]
+    - [31.0, -4.0, 2.0, 0.4, red_marker]
+  wind: [1.5, 0.8, 0.0]
+  gust_std: 1.0

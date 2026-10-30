@@ -1,0 +1,39 @@
+# SkyMind demo scenario: "Forest Run"
+# Take off, fly through a field of trees and past a building to two
+# waypoints, find the coloured survey markers on camera, return home, land.
+
+mission:
+  home: [0.0, 0.0]
+  cruise_altitude: 2.0
+  cruise_speed: 2.5
+  waypoints:
+    - [22.0, 2.0]
+    - [22.0, -8.0]
+  geofence: [-8.0, -15.0, 32.0, 12.0]
+  max_duration: 150.0
+
+world:
+  # [x, y, radius, height]  -- trees and poles
+  cylinders:
+    - [5.0, 0.3, 0.6, 6.0]
+    - [8.0, 2.5, 0.5, 5.0]
+    - [9.0, -1.8, 0.7, 6.0]
+    - [12.5, 0.8, 0.6, 7.0]
+    - [15.0, 3.5, 0.5, 5.0]
+    - [16.0, -1.0, 0.6, 6.0]
+    - [19.0, 1.5, 0.5, 5.0]
+    - [21.0, -4.0, 0.6, 6.0]
+    - [11.0, -6.5, 0.5, 4.0]
+    - [6.0, -4.5, 0.6, 5.0]
+  # [xmin, ymin, xmax, ymax, height]  -- buildings / walls
+  boxes:
+    - [13.0, -9.5, 17.0, -6.0, 8.0]
+  # [x, y, z, radius, label]  -- objects the camera should find
+  targets:
+    - [14.0, 6.0, 1.5, 0.35, red_marker]
+    - [26.0, 2.0, 1.8, 0.4, yellow_marker]
+    - [25.0, -8.0, 1.2, 0.4, red_marker]
+    - [10.0, -10.0, 2.0, 0.4, yellow_marker]
+    - [-4.0, 0.0, 2.0, 0.35, red_marker]
+  wind: [0.6, -0.3, 0.0]
+  gust_std: 0.4

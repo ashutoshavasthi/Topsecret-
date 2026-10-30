@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skymind"
+version = "0.1.0"
+description = "AI-powered self-balancing, obstacle-avoiding camera drone: flight control, avoidance, vision, recording and automatic flight judging"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.24",
+    "opencv-python-headless>=4.8",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+hardware = ["pymavlink>=2.4.40", "rplidar-roboticia>=0.9.5"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+skymind = "skymind.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["skymind*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 130

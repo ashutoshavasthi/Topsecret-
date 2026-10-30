@@ -1,0 +1,4 @@
+# Extra packages for the companion computer on the real drone
+-r requirements.txt
+pymavlink>=2.4.40
+rplidar-roboticia>=0.9.5

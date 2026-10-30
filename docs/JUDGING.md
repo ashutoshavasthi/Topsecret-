@@ -56,6 +56,8 @@ Hard rules:
 4. `python -m skymind sim --config config/windy_city.yaml`: strong gusty wind, a
    3 m alley between buildings that the mapper and A* planner find, and a wall that
    blocks the whole site, so the drone decides to climb over it.
-5. Open `report.md` and walk through the scorecard.
-6. (Hardware) Bench run with props off: move a board around the lidar and show the
+5. `python -m skymind app`: talk to the drone. "Take off", "go to the door", "what do you see?",
+   "find the red marker", "come back". Then ask a judge to press STOP mid-flight.
+6. Open `report.md` and walk through the scorecard.
+7. (Hardware) Bench run with props off: move a board around the lidar and show the
    avoidance mode change in the recorded HUD.

@@ -14,6 +14,13 @@ mission:
   max_altitude: 2.4                    # ceiling: never climb into it
   max_duration: 150.0
   blocked_timeout: 6.0
+  places:
+    home: [1.0, 0.0]
+    doorway: [10.0, 0.5]
+    lab: [16.0, 0.5]
+    desk: [3.5, -1.5]
+    shelf: [8.5, -2.5]
+    cabinet: [17.5, 0.5]
 
 world:
   cylinders:                 # [x, y, radius, height]

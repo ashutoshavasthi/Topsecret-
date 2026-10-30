@@ -12,6 +12,13 @@ mission:
   max_altitude: 1.8
   max_duration: 180.0
   blocked_timeout: 6.0
+  places:                            # names you can say: "go to the door"
+    home: [0.6, 0.0]
+    door: [4.0, 0.7]                 # just before the doorway
+    corridor: [5.6, 0.7]             # just through it
+    table: [1.9, 1.4]
+    cupboard: [6.8, 0.0]
+    window: [7.0, 1.8]
 
 world:
   cylinders:                         # [x, y, radius, height]

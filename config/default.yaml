@@ -11,6 +11,11 @@ mission:
     - [22.0, -8.0]
   geofence: [-8.0, -15.0, 32.0, 12.0]
   max_duration: 150.0
+  places:
+    home: [0.0, 0.0]
+    forest: [10.0, 0.0]
+    clearing: [22.0, 2.0]
+    building: [15.0, -4.5]
 
 world:
   # [x, y, radius, height]  -- trees and poles

@@ -40,6 +40,7 @@ class FlightMode(str, Enum):
     PREFLIGHT = "preflight"
     TAKEOFF = "takeoff"
     MISSION = "mission"
+    HOLD = "hold"  # interactive: hover in place and wait for the next command
     RTL = "rtl"
     LAND = "land"
     LANDED = "landed"
@@ -100,12 +101,24 @@ class FlightBrain:
         self.replan_timer = 0.0
         self.planned_goal: np.ndarray | None = None
         self.local_goal: np.ndarray | None = None
+        # Interactive mode (live app / voice assistant): after takeoff or reaching a goal the
+        # drone hovers (HOLD) and waits for the next command instead of flying a fixed mission.
+        self.interactive = False
+        self.hold_xy = self.home.copy()
+        self.yaw_target = 0.0
+        self.pending_events: list[str] = []
 
     @property
     def goal(self) -> np.ndarray:
         if self.mode is FlightMode.RTL:
             return self.home
+        if not self.waypoints:
+            return self.hold_xy
         return self.waypoints[min(self.wp_index, len(self.waypoints) - 1)]
+
+    @property
+    def airborne(self) -> bool:
+        return self.mode in (FlightMode.TAKEOFF, FlightMode.MISSION, FlightMode.HOLD, FlightMode.RTL, FlightMode.LAND)
 
     def start(self) -> None:
         self.mode = FlightMode.TAKEOFF
@@ -118,10 +131,72 @@ class FlightBrain:
             self.blocked_time = 0.0
             self.best_goal_dist = float("inf")
             self.no_progress_time = 0.0
+            if mode is FlightMode.LAND:
+                self.land_xy = None
+            if mode in (FlightMode.HOLD, FlightMode.LANDED):
+                self.vel_cmd = np.zeros(2)
+                self.acc_ff = np.zeros(2)
+
+    # ---------------------------------------------------------- interactive commands
+    # Called between update() ticks (the live session serialises them on its own thread).
+    def command_takeoff(self, position: np.ndarray, altitude: float) -> bool:
+        if self.mode not in (FlightMode.PREFLIGHT, FlightMode.LANDED):
+            return False
+        self.home = np.asarray(position[:2], dtype=float).copy()
+        self.hold_xy = self.home.copy()
+        self.altitude = float(np.clip(altitude, 0.3, self.cfg.mission.max_altitude))
+        self.failsafe = None
+        self._enter(FlightMode.TAKEOFF, self.pending_events, "takeoff command")
+        return True
+
+    def command_goto(self, xy: np.ndarray) -> bool:
+        if self.mode not in (FlightMode.MISSION, FlightMode.HOLD):
+            return False
+        self.waypoints = [np.asarray(xy, dtype=float)[:2].copy()]
+        self.wp_index = 0
+        self.planned_goal = None
+        if self.mode is FlightMode.MISSION:
+            self.avoider.reset()
+            self.best_goal_dist = float("inf")
+            self.no_progress_time = 0.0
+        self._enter(FlightMode.MISSION, self.pending_events, "go-to command")
+        return True
+
+    def command_hold(self, position: np.ndarray) -> bool:
+        if self.mode not in (FlightMode.MISSION, FlightMode.HOLD, FlightMode.RTL, FlightMode.TAKEOFF):
+            return False
+        self.hold_xy = np.asarray(position[:2], dtype=float).copy()
+        self.yaw_target = self.yaw_sp
+        self._enter(FlightMode.HOLD, self.pending_events, "hold command")
+        return True
+
+    def command_rtl(self) -> bool:
+        if self.mode not in (FlightMode.MISSION, FlightMode.HOLD):
+            return False
+        self._enter(FlightMode.RTL, self.pending_events, "return-home command")
+        return True
+
+    def command_land(self) -> bool:
+        if self.mode not in (FlightMode.TAKEOFF, FlightMode.MISSION, FlightMode.HOLD, FlightMode.RTL):
+            return False
+        self._enter(FlightMode.LAND, self.pending_events, "land command")
+        return True
+
+    def command_yaw(self, yaw: float) -> bool:
+        if self.mode is not FlightMode.HOLD:
+            return False
+        self.yaw_target = float(wrap_angle(yaw))
+        return True
+
+    def command_altitude(self, altitude: float) -> bool:
+        if self.mode not in (FlightMode.MISSION, FlightMode.HOLD):
+            return False
+        self.altitude = float(np.clip(altitude, 0.3, self.cfg.mission.max_altitude))
+        return True
 
     def _check_failsafes(self, est: StateEstimate, battery: float, t: float, events: list[str]) -> None:
         m = self.cfg.mission
-        flying = self.mode in (FlightMode.TAKEOFF, FlightMode.MISSION)
+        flying = self.mode in (FlightMode.TAKEOFF, FlightMode.MISSION, FlightMode.HOLD)
         x, y = est.position[:2]
         xmin, ymin, xmax, ymax = m.geofence
         if flying and battery < self.cfg.battery.rtl_threshold:
@@ -130,7 +205,7 @@ class FlightBrain:
         elif flying and not (xmin <= x <= xmax and ymin <= y <= ymax):
             self.failsafe = "geofence"
             self._enter(FlightMode.RTL, events, "geofence breach")
-        elif self.mode in (FlightMode.TAKEOFF, FlightMode.MISSION, FlightMode.RTL) and t > m.max_duration:
+        elif self.mode in (FlightMode.TAKEOFF, FlightMode.MISSION, FlightMode.HOLD, FlightMode.RTL) and t > m.max_duration:
             self.failsafe = "timeout"
             self._enter(FlightMode.LAND, events, "mission time limit")
 
@@ -174,7 +249,8 @@ class FlightBrain:
 
     def update(self, est: StateEstimate, ranges: np.ndarray, angles: np.ndarray, battery: float, t: float, dt: float, landed: bool) -> BrainOutput:
         m = self.cfg.mission
-        events: list[str] = []
+        events: list[str] = self.pending_events
+        self.pending_events = []
         self._check_failsafes(est, battery, t, events)
         pos = est.position
         avoid: AvoidanceCommand | None = None
@@ -183,7 +259,12 @@ class FlightBrain:
         if self.mode is FlightMode.TAKEOFF:
             sp.position = np.array([self.home[0], self.home[1], self.altitude])
             if pos[2] > self.altitude - 0.25:
-                self._enter(FlightMode.MISSION, events, "takeoff altitude reached")
+                if self.interactive:
+                    self.hold_xy = pos[:2].copy()
+                    self.yaw_target = self.yaw_sp
+                    self._enter(FlightMode.HOLD, events, "takeoff altitude reached")
+                else:
+                    self._enter(FlightMode.MISSION, events, "takeoff altitude reached")
 
         if self.mode in (FlightMode.MISSION, FlightMode.RTL):
             to_goal = self.goal - pos[:2]
@@ -194,7 +275,12 @@ class FlightBrain:
                     events.append(f"waypoint {self.wp_index} reached")
                     self.wp_index += 1
                     if self.wp_index >= len(self.waypoints):
-                        self._enter(FlightMode.RTL, events, "mission complete")
+                        if self.interactive:
+                            self.hold_xy = pos[:2].copy()
+                            self.yaw_target = self.yaw_sp
+                            self._enter(FlightMode.HOLD, events, "goal reached")
+                        else:
+                            self._enter(FlightMode.RTL, events, "mission complete")
                 to_goal = self.goal - pos[:2]
         if self.mode in (FlightMode.MISSION, FlightMode.RTL):
             dist = float(np.linalg.norm(to_goal))
@@ -283,6 +369,15 @@ class FlightBrain:
                 step = m.max_yaw_rate * dt
                 self.yaw_sp = float(wrap_angle(self.yaw_sp + np.clip(err, -step, step)))
             sp.yaw = self.yaw_sp
+
+        if self.mode is FlightMode.HOLD:
+            sp.position = np.array([self.hold_xy[0], self.hold_xy[1], self.altitude])
+            err = float(wrap_angle(self.yaw_target - self.yaw_sp))
+            step = m.max_yaw_rate * dt
+            self.yaw_sp = float(wrap_angle(self.yaw_sp + np.clip(err, -step, step)))
+            sp.yaw = self.yaw_sp
+            if self.planner is not None:  # keep mapping while hovering / looking around
+                self.planner.grid.update(pos, ranges, angles, self.avoider.max_range, self.map_weights)
 
         if self.mode is FlightMode.LAND:
             if self.land_xy is None:

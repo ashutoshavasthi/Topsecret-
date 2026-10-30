@@ -10,6 +10,9 @@ SkyMind is the complete software stack for an autonomous quadcopter that:
   box, YOLOv8 ONNX optionally) and detection snapshots;
 * **gets judged**: every flight produces an automatic, reproducible scorecard covering stability, navigation, safety,
   vision and efficiency/noise, with a flight map and timeline;
+* **talks to you**: a voice and chat co-pilot app. Say "go to the door and tell me what you see";
+  a free, local AI (Ollama) plans the flight, looks through the camera and answers, while the safety
+  layer stays in charge. See [docs/ASSISTANT.md](docs/ASSISTANT.md) (screenshot: [docs/images/app.jpg](docs/images/app.jpg));
 * **is efficient**: a physics power and noise model, a design calculator to choose props and batteries, and a CPU
   benchmark so the onboard software fits a $15 Raspberry Pi Zero 2 W.
 
@@ -34,6 +37,7 @@ drone through a Pixhawk (ArduPilot/PX4) over MAVLink.
 
 ```bash
 pip install -r requirements.txt
+python -m skymind app                                        # voice/chat control app -> http://localhost:8080
 python -m pytest -q                                          # safety-critical behaviour tests
 python -m skymind sim                                        # fly, record, judge the "Forest Run" mission
 python -m skymind sim --config config/windy_city.yaml        # gusty wind, narrow alley, wall to climb
@@ -92,6 +96,7 @@ python -m skymind bench --config config/micro_indoor.yaml                    # o
 
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the pieces fit, with the main design decisions
 * [docs/JUDGING.md](docs/JUDGING.md): how flights are scored, and a 5-minute demo script for judges
+* [docs/ASSISTANT.md](docs/ASSISTANT.md): the voice/chat assistant app and its local AI
 * [docs/BUDGET_BUILD.md](docs/BUDGET_BUILD.md): the ₹5,000 Nano build (ESP32 + laptop brain)
 * [docs/MICRO_BUILD.md](docs/MICRO_BUILD.md): the small, quiet, ≈ $230 college build
 * [docs/HARDWARE.md](docs/HARDWARE.md): the full-size build: parts, wiring, autopilot parameters and bring-up
@@ -110,6 +115,9 @@ skymind/
   design.py     build comparison calculator
   bench.py      companion-computer CPU benchmark
   mission.py    FlightBrain (autonomy) + SimulationRunner
+  live.py       live command-driven sessions (simulated or real drone)
+  assistant/    skills, built-in command parser, Ollama client, conversational agent
+  app/          web control app (video, map, chat, voice, STOP)
   cli.py        `python -m skymind ...`
 config/         hardware profiles and mission scenarios (YAML)
 firmware/       ESP32-CAM sensor-head sketch (Nano build)

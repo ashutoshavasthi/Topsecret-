@@ -6,6 +6,7 @@
     skymind fly     --connect URL [--arm]         run on a real drone (bench mode unless --arm)
     skymind design  CONFIG... [--sweep-battery]   compare builds: weight, power, endurance, noise
     skymind bench   [--config FILE]               companion-computer CPU budget
+    skymind app     [--config FILE] [--esp-drone URI | --connect URL]   voice/chat control app
 """
 
 from __future__ import annotations
@@ -178,6 +179,63 @@ def cmd_bench(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_app(args: argparse.Namespace) -> int:
+    from skymind.app.server import SkyMindApp
+    from skymind.assistant.agent import DroneAssistant
+    from skymind.live import RealLiveSession, SimLiveSession
+
+    cfg = load_config(args.config)
+    if args.no_ai:
+        cfg.assistant.use_llm = False
+    if args.model:
+        cfg.assistant.model = args.model
+    if args.vision_model is not None:
+        cfg.assistant.vision_model = args.vision_model or None
+    out = Path(args.out) if args.out else _default_out("app")
+    if args.esp_drone or args.connect:
+        from skymind.vision.camera import open_camera
+
+        if args.esp_drone:
+            from skymind.hal.esp_drone import EspDroneLink
+            from skymind.hal.esp_sensors import EspCamSensors
+
+            vehicle = EspDroneLink(args.esp_drone, max_altitude=cfg.mission.max_altitude)
+            sensors = EspCamSensors(cfg.sensors, port=args.sensor_port)
+        else:
+            from skymind.hal.mavlink_bridge import MavlinkVehicle
+            from skymind.hal.tof_ring import ToFRing
+
+            vehicle = MavlinkVehicle(args.connect)
+            sensors = ToFRing(cfg.sensors)
+        camera = None if args.no_camera else open_camera(cfg.camera)
+        if args.arm and not args.yes:
+            if input("Allow the app to ARM and FLY the real drone? type 'fly': ").strip() != "fly":
+                print("aborted")
+                return 1
+        session = RealLiveSession(cfg, out, vehicle, sensors, camera, arm=args.arm)
+    else:
+        session = SimLiveSession(cfg, out, speed=args.speed)
+    session.start()
+    assistant = DroneAssistant(session, cfg)
+    app = SkyMindApp(session, assistant, host=args.host, port=args.port)
+    httpd = app.serve()
+    print(f"{cfg.assistant.name} control app: {app.url}")
+    print("AI:", f"{cfg.assistant.model} via Ollama" if assistant.llm_ok else "built-in commands (Ollama model not found)")
+    if app.token:
+        print("Serving beyond localhost: the link above includes the access token. Keep it private.")
+    print(f"Recording to {out}. Press Ctrl+C to quit (a real drone lands first).")
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.shutdown()
+        assistant.cancel.set()
+        session.stop()
+        print(f"Session saved. Score it with: python -m skymind judge {out}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="skymind", description="AI-powered self-balancing, obstacle-avoiding camera drone")
     sub = p.add_subparsers(dest="command", required=True)
@@ -226,6 +284,22 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--config", default="config/default.yaml")
     b.add_argument("--iterations", type=int, default=60)
     b.set_defaults(func=cmd_bench)
+    ap = sub.add_parser("app", help="voice + chat control app (simulated or real drone)")
+    ap.add_argument("--config", default="config/nano_room.yaml")
+    ap.add_argument("--host", default="127.0.0.1", help="0.0.0.0 to open it from a phone (token protected)")
+    ap.add_argument("--port", type=int, default=8080)
+    ap.add_argument("--out")
+    ap.add_argument("--speed", type=float, default=1.0, help="simulation speed (1 = real time)")
+    ap.add_argument("--model", help="Ollama model for the assistant (default from config)")
+    ap.add_argument("--vision-model", help="Ollama vision model ('' to disable)")
+    ap.add_argument("--no-ai", action="store_true", help="built-in commands only, no language model")
+    ap.add_argument("--esp-drone", help="real Nano drone, e.g. udp://192.168.43.42")
+    ap.add_argument("--connect", help="real MAVLink drone, e.g. /dev/serial0")
+    ap.add_argument("--sensor-port", type=int, default=2399)
+    ap.add_argument("--no-camera", action="store_true")
+    ap.add_argument("--arm", action="store_true", help="allow takeoff of a REAL drone (default: bench mode)")
+    ap.add_argument("--yes", action="store_true")
+    ap.set_defaults(func=cmd_app)
     return p
 
 

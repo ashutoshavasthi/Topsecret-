@@ -149,6 +149,8 @@ class MissionConfig:
     max_altitude: float = 30.0
     blocked_timeout: float = 8.0
     max_yaw_rate: float = 1.2  # rad/s
+    # Named places the assistant understands ("go to the door"): name -> [x, y]
+    places: dict[str, list[float]] = field(default_factory=dict)
 
 
 @dataclass
@@ -192,6 +194,18 @@ class JudgeConfig:
 
 
 @dataclass
+class AssistantConfig:
+    name: str = "SkyMind"  # what the assistant calls itself
+    wake_word: str = "skymind"  # hands-free voice mode listens for this
+    use_llm: bool = True  # False: built-in command parser only (works with no AI installed)
+    ollama_url: str = "http://127.0.0.1:11434"
+    model: str = "qwen2.5:3b"  # local text model that turns requests into actions
+    vision_model: str | None = "moondream"  # local vision model for "what do you see?" (None: detector only)
+    timeout: float = 60.0  # s per LLM call (small laptops are slow)
+    history_turns: int = 6  # previous chat turns given to the model
+
+
+@dataclass
 class SimConfig:
     physics_hz: float = 250.0
     seed: int = 7
@@ -214,6 +228,7 @@ class SkyMindConfig:
     mission: MissionConfig = field(default_factory=MissionConfig)
     world: WorldConfig = field(default_factory=WorldConfig)
     judge: JudgeConfig = field(default_factory=JudgeConfig)
+    assistant: AssistantConfig = field(default_factory=AssistantConfig)
     sim: SimConfig = field(default_factory=SimConfig)
 
 

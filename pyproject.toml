@@ -25,6 +25,9 @@ skymind = "skymind.cli:main"
 [tool.setuptools.packages.find]
 include = ["skymind*"]
 
+[tool.setuptools.package-data]
+"skymind.app" = ["static/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

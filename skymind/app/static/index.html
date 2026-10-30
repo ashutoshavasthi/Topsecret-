@@ -59,7 +59,8 @@
   .stop { background: var(--danger); border-color: var(--danger); color: #fff; font-size: 17px; letter-spacing: .12em;
     padding: 12px 26px; margin-left: auto; box-shadow: 0 0 18px rgba(255,77,94,.35); }
   .stop:hover { background: #ff6170; color: #fff; border-color: #ff6170; }
-  #mapCard { grid-area: map; align-self: start; } #teleCard { grid-area: tele; align-self: start; }
+  #mapCard { grid-area: map; align-self: start; }
+  .tabs a { color: var(--dim); text-decoration: none; } .tabs a.on { color: var(--accent); } #teleCard { grid-area: tele; align-self: start; }
   #mapImg { width: 100%; max-height: 34vh; object-fit: contain; display: block; background: #121010; }
   .tele { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--line); }
   .tele div { background: var(--panel); padding: 9px 12px; }
@@ -123,13 +124,15 @@
     <button data-tool="land">⬇ Land</button>
     <button data-tool="return_home">⌂ Home</button>
     <button data-tool="scan">⟳ Look around</button>
+    <button data-tool="survey" title="Explore and map the room: obstacles, doorways, exits">▦ Scan room</button>
+    <button id="throwBtn" style="display:none" title="Simulator test: throw a paper ball at the drone">● Throw ball</button>
     <button data-tool="photo">◉ Photo</button>
     <button id="resetBtn" style="display:none">↺ Reset sim</button>
     <button class="stop" id="stopBtn" title="Esc">■ STOP</button>
   </div>
 
   <section class="card" id="mapCard">
-      <h2><span>Live map</span><span>what the drone has mapped</span></h2>
+      <h2><span>Map</span><span class="tabs"><a href="#" id="tabLive" class="on">live</a> · <a href="#" id="tabScan">room scan</a></span></h2>
       <img id="mapImg" alt="Live map">
   </section>
   <section class="card" id="teleCard">
@@ -175,11 +178,15 @@
   video.onload = () => { $("novideo").style.display = "none"; };
   video.onerror = () => { $("novideo").style.display = "grid"; setTimeout(() => video.src = withT("/video.mjpg?" + Date.now()), 1500); };
   video.src = withT("/video.mjpg");
+  let mapView = "live", scanReady = false;
   const map = new Image();
-  map.onload = () => { $("mapImg").src = map.src; setTimeout(loadMap, 600); };
+  map.onload = () => { if (map.naturalWidth) $("mapImg").src = map.src; setTimeout(loadMap, mapView === "live" ? 600 : 3000); };
   map.onerror = () => setTimeout(loadMap, 1500);
-  const loadMap = () => { map.src = withT("/map.png?" + Date.now()); };
+  const loadMap = () => { map.src = withT((mapView === "scan" && scanReady ? "/scan.png?" : "/map.png?") + Date.now()); };
   loadMap();
+  const setView = (v) => { mapView = v; $("tabLive").classList.toggle("on", v === "live"); $("tabScan").classList.toggle("on", v === "scan"); loadMap(); };
+  $("tabLive").addEventListener("click", (e) => { e.preventDefault(); setView("live"); });
+  $("tabScan").addEventListener("click", (e) => { e.preventDefault(); setView("scan"); });
 
   // ---------------------------------------------------------------- status
   const MODE = { preflight: "READY", takeoff: "TAKEOFF", mission: "FLYING", hold: "HOVER", rtl: "RETURNING",
@@ -212,6 +219,10 @@
       $("dets").textContent = d.length ? "sees: " + [...new Set(d.map(x => x.label.replace(/_/g, " ")))].join(", ") : "";
       $("places").textContent = s.places && s.places.length ? "Places I know: " + s.places.join(", ") : "";
       $("resetBtn").style.display = s.can_reset ? "" : "none";
+      $("throwBtn").style.display = s.can_reset ? "" : "none";
+      if (s.scan_ready && !scanReady) { scanReady = true; setView("scan"); }
+      scanReady = !!s.scan_ready;
+      if (s.dodge && s.dodge.thrown) $("dets").textContent = `dodged ${s.dodge.dodged}/${s.dodge.thrown} balls` + ($("dets").textContent ? " · " + $("dets").textContent : "");
     } catch (e) { online = false; chip("chipLink", "LINK", "OFFLINE", "bad"); }
     setTimeout(pollStatus, 300);
   }
@@ -245,6 +256,7 @@
   const stopNow = () => { post("/api/stop"); if ("speechSynthesis" in window) speechSynthesis.cancel(); };
   $("stopBtn").addEventListener("click", stopNow);
   $("resetBtn").addEventListener("click", () => post("/api/reset"));
+  $("throwBtn").addEventListener("click", () => post("/api/throw", { speed: 5 }));
 
   // ---------------------------------------------------------------- voice out
   let voice = null;

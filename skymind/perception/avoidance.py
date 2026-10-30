@@ -18,7 +18,7 @@ vehicle away if it ever ends up inside the safety radius.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 import numpy as np
@@ -45,11 +45,12 @@ class AvoidMode(str, Enum):
 
 @dataclass
 class AvoidanceCommand:
-    velocity_xy: np.ndarray
+    velocity_xy: np.ndarray  # goal-seeking motion + repulsion
     heading: float
     mode: AvoidMode
     min_range: float
     clearance_ahead: float
+    repulsion: np.ndarray = field(default_factory=lambda: np.zeros(2))  # the push-away part alone
 
 
 class ObstacleAvoider:
@@ -127,17 +128,25 @@ class ObstacleAvoider:
 
         # Repulsion if something is already inside the safety radius: one push away from the
         # weighted mean obstacle direction (not a sum over beams, which explodes next to walls).
+        # The push is kept separate and never scaled away: even when we may not move toward the goal
+        # (turning in place, or no safe heading), getting away from something too close is always allowed.
         zone = cfg.safety_radius + 0.3
         close = ranges < zone
+        push = np.zeros(2)
         if np.any(close):
             weight = (zone - ranges[close]) / zone
             away = -(np.stack([np.cos(angles[close]), np.sin(angles[close])], axis=1) * weight[:, None]).sum(axis=0)
             n = float(np.linalg.norm(away))
             if n > 1e-6:
-                vel = vel + cfg.repulse_gain * float(weight.max()) * away / n
+                push = min(cfg.repulse_gain * float(weight.max()), 0.6) * away / n
         n = float(np.linalg.norm(vel))
         if n > cruise_speed:
-            vel = vel * (cruise_speed / n)
+            vel = vel * (cruise_speed / n) if n > 1e-9 else vel
+        total = vel + push
+        cap = max(cruise_speed, 0.6)
+        n = float(np.linalg.norm(total))
+        if n > cap:
+            total = total * (cap / n)
 
         self.prev_heading = heading
-        return AvoidanceCommand(vel, heading, mode, min_range, goal_clear)
+        return AvoidanceCommand(total, heading, mode, min_range, goal_clear, push)

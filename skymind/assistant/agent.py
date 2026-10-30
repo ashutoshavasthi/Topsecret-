@@ -29,7 +29,7 @@ from skymind.config import SkyMindConfig
 from skymind.live import LiveSession
 
 MAX_ACTIONS = 6
-READ_ONLY = {"status", "describe", "photo"}  # answered without interrupting what the drone is doing
+READ_ONLY = {"status", "describe", "photo", "room_report"}  # answered without interrupting what the drone is doing
 
 
 @dataclass

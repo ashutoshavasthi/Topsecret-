@@ -56,6 +56,11 @@ def parse(text: str, places: list[str]) -> Plan | None:
         return Plan("", [{"tool": "status"}])
     if re.search(r"\b(photo|picture|snapshot|capture)\b", t):
         return Plan("Taking a photo.", [{"tool": "photo"}])
+    if re.search(r"\b(scan|map|explore|survey)\s+(the\s+|this\s+|my\s+)?(room|area|place|house|space|hall|lab)\b"
+                 r"|\bexplore\b|\bmake a map\b|\broom scan\b", t):
+        return Plan("Starting a room scan. I'll explore and map everything, it takes a few minutes.", [{"tool": "survey"}])
+    if re.search(r"\b(exits?|doorways?|doors in|what did you find|room report|what's in the room|blockages?)\b", t):
+        return Plan("", [{"tool": "room_report"}])
     if re.search(r"\b(look around|scan|spin around|360)\b", t):
         return Plan("Looking around.", [{"tool": "scan"}])
     if re.search(r"\b(what (do|can) you see|describe|what's (there|in front|ahead)|what is in front)\b", t):

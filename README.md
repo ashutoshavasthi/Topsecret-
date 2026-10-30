@@ -10,6 +10,12 @@ SkyMind is the complete software stack for an autonomous quadcopter that:
   box, YOLOv8 ONNX optionally) and detection snapshots;
 * **gets judged**: every flight produces an automatic, reproducible scorecard covering stability, navigation, safety,
   vision and efficiency/noise, with a flight map and timeline;
+* **dodges thrown objects**: infrared ToF + camera "looming" (both see paper and plastic), an onboard
+  reflex that predicts the ball's arc and picks the escape with the biggest miss. In simulation: 90–100 %
+  dodged at 3–5 m/s, 80 % at 7 m/s from 4 m. See [docs/DODGE.md](docs/DODGE.md);
+* **scans a room**: explores by itself and maps obstacles, doorways, exits, tight gaps, tables to fly over,
+  and where it saw things (vision triangulation + ranging), then uses the map on later flights.
+  See [docs/ROOM_SCAN.md](docs/ROOM_SCAN.md) (example: [docs/images/room_scan.png](docs/images/room_scan.png));
 * **talks to you**: a voice and chat co-pilot app. Say "go to the door and tell me what you see";
   a free, local AI (Ollama) plans the flight, looks through the camera and answers, while the safety
   layer stays in charge. See [docs/ASSISTANT.md](docs/ASSISTANT.md) (screenshot: [docs/images/app.jpg](docs/images/app.jpg));
@@ -38,6 +44,8 @@ drone through a Pixhawk (ArduPilot/PX4) over MAVLink.
 ```bash
 pip install -r requirements.txt
 python -m skymind app                                        # voice/chat control app -> http://localhost:8080
+python -m skymind survey                                     # explore + scan a room (obstacles, doorways, exits)
+python -m skymind dodge                                      # throw simulated balls at it, measure dodges
 python -m pytest -q                                          # safety-critical behaviour tests
 python -m skymind sim                                        # fly, record, judge the "Forest Run" mission
 python -m skymind sim --config config/windy_city.yaml        # gusty wind, narrow alley, wall to climb
@@ -97,6 +105,8 @@ python -m skymind bench --config config/micro_indoor.yaml                    # o
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the pieces fit, with the main design decisions
 * [docs/JUDGING.md](docs/JUDGING.md): how flights are scored, and a 5-minute demo script for judges
 * [docs/ASSISTANT.md](docs/ASSISTANT.md): the voice/chat assistant app and its local AI
+* [docs/DODGE.md](docs/DODGE.md): dodging thrown objects: sensors, reflex, results, add-on parts in ₹
+* [docs/ROOM_SCAN.md](docs/ROOM_SCAN.md): room scanning: exploration, doorways/exits, fusion, using the map
 * [docs/BUDGET_BUILD.md](docs/BUDGET_BUILD.md): the ₹5,000 Nano build (ESP32 + laptop brain)
 * [docs/MICRO_BUILD.md](docs/MICRO_BUILD.md): the small, quiet, ≈ $230 college build
 * [docs/HARDWARE.md](docs/HARDWARE.md): the full-size build: parts, wiring, autopilot parameters and bring-up
@@ -115,12 +125,14 @@ skymind/
   design.py     build comparison calculator
   bench.py      companion-computer CPU benchmark
   mission.py    FlightBrain (autonomy) + SimulationRunner
+  dodge.py      thrown-object sensors, ballistic tracker, model-predictive escape, throw experiments
+  survey.py     frontier exploration, room-scan analysis, triangulation, saved maps
   live.py       live command-driven sessions (simulated or real drone)
   assistant/    skills, built-in command parser, Ollama client, conversational agent
   app/          web control app (video, map, chat, voice, STOP)
   cli.py        `python -m skymind ...`
 config/         hardware profiles and mission scenarios (YAML)
-firmware/       ESP32-CAM sensor-head sketch (Nano build)
+firmware/       ESP32-CAM sensor-head sketch (Nano build), dodge-reflex C core (compiled + tested)
 tests/          unit + end-to-end mission tests
 ```
 

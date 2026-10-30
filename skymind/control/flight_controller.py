@@ -55,6 +55,9 @@ class FlightController:
         self.rate_pid = PID(cfg.rate_p, cfg.rate_i, cfg.rate_d, output_limit=[80.0, 80.0, 20.0], integral_limit=[5.0, 5.0, 2.0])
         self.max_tilt = math.radians(cfg.max_tilt_deg)
         self.max_rate = np.array(cfg.max_rate)
+        # Lowest collective thrust as a fraction of 1 g. A dodge reflex lowers it briefly
+        # so the drone can drop almost in free fall, the fastest way out of the way.
+        self.min_thrust_frac = 0.3
 
     def reset(self) -> None:
         self.vel_pid.reset()
@@ -72,7 +75,7 @@ class FlightController:
 
     def thrust_vector(self, accel_sp: np.ndarray) -> np.ndarray:
         """Desired world-frame thrust, with tilt limited to ``max_tilt``."""
-        az = max(accel_sp[2] + GRAVITY, 0.3 * GRAVITY)
+        az = max(accel_sp[2] + GRAVITY, self.min_thrust_frac * GRAVITY)
         a_xy = accel_sp[:2]
         max_xy = az * math.tan(self.max_tilt)
         n = np.linalg.norm(a_xy)

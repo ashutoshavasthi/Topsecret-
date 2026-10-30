@@ -47,6 +47,7 @@ avoidance:
   map_resolution: 0.1
   replan_interval: 1.0
   path_lookahead: 2.0
+  map_memory: false           # optional: mapped obstacles as virtual readings (see docs/ROOM_SCAN.md)
   max_heading_offset_deg: 30  # sensors only face forward: turn, then go
 
 camera:

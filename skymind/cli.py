@@ -7,6 +7,8 @@
     skymind design  CONFIG... [--sweep-battery]   compare builds: weight, power, endurance, noise
     skymind bench   [--config FILE]               companion-computer CPU budget
     skymind app     [--config FILE] [--esp-drone URI | --connect URL]   voice/chat control app
+    skymind dodge   [--sensors A,B] [--speeds 3,5,7]                     throw balls at it, measure dodges
+    skymind survey  [--config FILE]               explore + scan a room (obstacles, doorways, exits)
 """
 
 from __future__ import annotations
@@ -44,7 +46,7 @@ def cmd_sim(args: argparse.Namespace) -> int:
     (out / "config.json").write_text(json.dumps(config_to_dict(cfg), indent=2), encoding="utf-8")
 
     print(f"Flying simulated mission -> {out}")
-    result = SimulationRunner(cfg, out, record_video=not args.no_video, verbose=True).run()
+    result = SimulationRunner(cfg, out, record_video=not args.no_video, verbose=True, prior_map=args.prior_map).run()
     (out / "mission.json").write_text(json.dumps(result.to_dict(), indent=2), encoding="utf-8")
 
     records = load_telemetry(out)
@@ -215,6 +217,9 @@ def cmd_app(args: argparse.Namespace) -> int:
         session = RealLiveSession(cfg, out, vehicle, sensors, camera, arm=args.arm)
     else:
         session = SimLiveSession(cfg, out, speed=args.speed)
+    if args.prior_map:
+        session.prior_map = args.prior_map
+        session.brain.load_prior_map(args.prior_map)
     session.start()
     assistant = DroneAssistant(session, cfg)
     app = SkyMindApp(session, assistant, host=args.host, port=args.port)
@@ -236,6 +241,55 @@ def cmd_app(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_survey(args: argparse.Namespace) -> int:
+    from skymind.assistant.skills import DroneSkills
+    from skymind.live import SimLiveSession
+
+    cfg = load_config(args.config)
+    out = Path(args.out) if args.out else _default_out("survey")
+    session = SimLiveSession(cfg, out, speed=0)
+    session.start()
+    try:
+        print(f"Exploring {args.config} (simulated) -> {out}")
+        result = DroneSkills(session).survey(max_minutes=args.minutes)
+        print(result.text)
+        if session.room_scan is not None:
+            skills = DroneSkills(session)
+            skills.return_home()
+            st = session.status()
+            print(f"flight time {st['t']:.0f} s, battery left {st['battery'] * 100:.0f}%, collisions {session.collisions}")
+            print(f"\nscan image: {out / 'room_scan.png'}\nscan data:  {out / 'room_scan.json'}")
+            print(f"map for later flights: --prior-map {out / 'room_map.npz'}")
+    finally:
+        session.stop()
+    return 0 if session.collisions == 0 and session.room_scan is not None else 1
+
+
+def cmd_dodge(args: argparse.Namespace) -> int:
+    from skymind.dodge import SENSORS, ReflexConfig, run_throws
+
+    cfg = load_config(args.config)
+    speeds = [float(v) for v in args.speeds.split(",")]
+    setups = args.sensors.split(",")
+    for name in setups:
+        if name not in SENSORS:
+            print(f"unknown sensor setup '{name}'. Choose from: {', '.join(SENSORS)}", file=sys.stderr)
+            return 2
+    where = "onboard" if args.latency < 0.05 else "off-board"
+    print(f"{args.throws} throws per speed, from {args.distance} m, within {args.sector:g} deg of the nose; "
+          f"reflex latency {args.latency * 1000:.0f} ms ({where})")
+    print(f"{'sensor setup':<26}" + "".join(f"{v:>9g} m/s" for v in speeds))
+    for name in setups:
+        cells = []
+        for v in speeds:
+            r = run_throws(cfg, SENSORS[name], v, args.throws, ReflexConfig(latency=args.latency),
+                           sector_deg=args.sector, distance=args.distance, seed=args.seed)
+            cells.append(f"{100 * r.dodge_rate:>9.0f} %  ")
+        print(f"{name:<26}" + "".join(cells), flush=True)
+    print("(% of throws that missed. 'none' is the no-reflex baseline: some throws miss anyway.)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="skymind", description="AI-powered self-balancing, obstacle-avoiding camera drone")
     sub = p.add_subparsers(dest="command", required=True)
@@ -245,7 +299,14 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out")
     s.add_argument("--seed", type=int)
     s.add_argument("--no-video", action="store_true")
+    s.add_argument("--prior-map", help="room_map.npz from 'skymind survey': plan with the known room from the start")
     s.set_defaults(func=cmd_sim)
+
+    sv = sub.add_parser("survey", help="let the drone explore and scan a room: obstacles, doorways, exits, low obstacles")
+    sv.add_argument("--config", default="config/nano_room.yaml")
+    sv.add_argument("--out")
+    sv.add_argument("--minutes", type=float, default=4.0, help="exploration time limit (flight time)")
+    sv.set_defaults(func=cmd_survey)
 
     j = sub.add_parser("judge", help="score an existing run directory")
     j.add_argument("run_dir")
@@ -293,6 +354,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--model", help="Ollama model for the assistant (default from config)")
     ap.add_argument("--vision-model", help="Ollama vision model ('' to disable)")
     ap.add_argument("--no-ai", action="store_true", help="built-in commands only, no language model")
+    ap.add_argument("--prior-map", help="room_map.npz from an earlier room scan")
     ap.add_argument("--esp-drone", help="real Nano drone, e.g. udp://192.168.43.42")
     ap.add_argument("--connect", help="real MAVLink drone, e.g. /dev/serial0")
     ap.add_argument("--sensor-port", type=int, default=2399)
@@ -300,6 +362,17 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--arm", action="store_true", help="allow takeoff of a REAL drone (default: bench mode)")
     ap.add_argument("--yes", action="store_true")
     ap.set_defaults(func=cmd_app)
+
+    dg = sub.add_parser("dodge", help="throw simulated balls at the drone and measure how many it dodges")
+    dg.add_argument("--config", default="config/nano_room.yaml")
+    dg.add_argument("--sensors", default="none,looming,tof8x8+looming_wide")
+    dg.add_argument("--speeds", default="3,5,7,9")
+    dg.add_argument("--throws", type=int, default=20)
+    dg.add_argument("--distance", type=float, default=2.5, help="m from thrower to drone")
+    dg.add_argument("--sector", type=float, default=90.0, help="throws come from within this angle of the nose")
+    dg.add_argument("--latency", type=float, default=0.01, help="s, reflex decision-to-motor delay (0.15 = via WiFi laptop)")
+    dg.add_argument("--seed", type=int, default=1)
+    dg.set_defaults(func=cmd_dodge)
     return p
 
 

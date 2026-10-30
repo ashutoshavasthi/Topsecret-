@@ -58,6 +58,8 @@ Hard rules:
    blocks the whole site, so the drone decides to climb over it.
 5. `python -m skymind app`: talk to the drone. "Take off", "go to the door", "what do you see?",
    "find the red marker", "come back". Then ask a judge to press STOP mid-flight.
+   In the same app: press **Throw ball** a few times (it dodges and reports the miss distance),
+   then say "scan the room" and watch the room scan appear on the map: doorway, exits, table, markers.
 6. Open `report.md` and walk through the scorecard.
 7. (Hardware) Bench run with props off: move a board around the lidar and show the
    avoidance mode change in the recorded HUD.

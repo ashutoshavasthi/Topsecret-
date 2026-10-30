@@ -98,6 +98,11 @@ class AvoidanceConfig:
     # direction of travel. None = move in any direction at full speed (360-degree lidar).
     max_heading_offset_deg: float | None = None
     reaction_time: float = 0.0  # s of sensing-to-actuation latency to budget for when braking
+    min_ground_clearance: float = 0.3  # m kept above tables and other low obstacles under us
+    # Map memory: obstacles already on the map act as extra (virtual) range readings, so the reactive
+    # layer still avoids a door frame that has left the sensors' view. Needed with sparse sensors.
+    map_memory: bool = False
+    plan_margin: float = 0.0  # m added to safety_radius for route planning only: routes avoid gaps that barely fit
 
 
 @dataclass

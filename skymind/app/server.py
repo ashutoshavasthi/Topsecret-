@@ -125,6 +125,12 @@ class SkyMindApp:
                     return self._json(app.assistant.messages_after(after))
                 if u.path == "/map.png":
                     return self._send(200, app.map_png(), "image/png")
+                if u.path == "/scan.png":
+                    png = app.session.render_scan()
+                    return self._send(200, png, "image/png") if png else self._send(204, b"", "text/plain")
+                if u.path == "/api/scan":
+                    scan = app.session.room_scan
+                    return self._json(scan.to_dict() if scan is not None else None)
                 if u.path == "/frame.jpg":
                     jpg = app.session.latest_jpeg
                     return self._send(200, jpg, "image/jpeg") if jpg else self._send(204, b"", "text/plain")
@@ -151,6 +157,10 @@ class SkyMindApp:
                 if u.path == "/api/stop":
                     app.assistant.stop()
                     return self._json({"ok": True})
+                if u.path == "/api/throw" and isinstance(app.session, SimLiveSession):
+                    speed = float(body.get("speed", 5.0)) if isinstance(body.get("speed", 5.0), (int, float)) else 5.0
+                    ok = app.session.throw_ball(max(1.0, min(speed, 12.0)))
+                    return self._json({"ok": bool(ok)})
                 if u.path == "/api/reset" and isinstance(app.session, SimLiveSession):
                     app.assistant.stop()
                     app.session.reset()

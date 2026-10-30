@@ -65,6 +65,9 @@ Things you can say:
 | "what do you see?" | Describes the camera view (vision model, or detector summary) |
 | "how's the battery?" | Status report, answered *without* interrupting a flight |
 | "take a photo" | Saves a snapshot |
+| "scan the room" / "explore" | Explores by itself and builds the room scan (see docs/ROOM_SCAN.md) |
+| "where are the exits?" / "what did you find?" | Reports the last room scan |
+| "go through doorway 1" | Doorways found by the scan become named places |
 | Anything more complex | "Check the door, then the window, and come back" is planned into steps by the AI |
 
 ## How it decides (and why it's safe)

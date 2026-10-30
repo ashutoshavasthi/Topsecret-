@@ -96,7 +96,7 @@ class FlightBrain:
         self.best_goal_dist = float("inf")
         self.no_progress_time = 0.0
         a = cfg.avoidance
-        self.planner = GlobalPlanner(m.geofence, a.safety_radius, a.map_resolution) if a.use_global_planner else None
+        self.planner = GlobalPlanner(m.geofence, a.safety_radius + a.plan_margin, a.map_resolution) if a.use_global_planner else None
         self.map_weights = map_hit_weights(cfg.sensors)
         self.replan_timer = 0.0
         self.planned_goal: np.ndarray | None = None
@@ -105,8 +105,19 @@ class FlightBrain:
         # drone hovers (HOLD) and waits for the next command instead of flying a fixed mission.
         self.interactive = False
         self.hold_xy = self.home.copy()
+        self.hold_anchor = self.hold_xy.copy()
         self.yaw_target = 0.0
         self.pending_events: list[str] = []
+        # Terrain following: height of whatever is under (or just ahead of) us, from the
+        # downward range sensor and the room scan's low-obstacle map. Set by the session.
+        self.ground_below = 0.0
+        self.brake_xy: np.ndarray | None = None
+
+    def load_prior_map(self, npz_path) -> bool:
+        """Start with a saved room scan, so routes through doorways are planned from the first second."""
+        from skymind.survey import load_prior
+
+        return self.planner is not None and load_prior(self.planner.grid, npz_path)
 
     @property
     def goal(self) -> np.ndarray:
@@ -115,6 +126,12 @@ class FlightBrain:
         if not self.waypoints:
             return self.hold_xy
         return self.waypoints[min(self.wp_index, len(self.waypoints) - 1)]
+
+    @property
+    def altitude_command(self) -> float:
+        """Cruise altitude, raised when needed to stay clear of tables and other low obstacles."""
+        clear = self.cfg.avoidance.min_ground_clearance
+        return float(min(max(self.altitude, self.ground_below + clear), self.cfg.mission.max_altitude))
 
     @property
     def airborne(self) -> bool:
@@ -166,6 +183,7 @@ class FlightBrain:
         if self.mode not in (FlightMode.MISSION, FlightMode.HOLD, FlightMode.RTL, FlightMode.TAKEOFF):
             return False
         self.hold_xy = np.asarray(position[:2], dtype=float).copy()
+        self.hold_anchor = self.hold_xy.copy()
         self.yaw_target = self.yaw_sp
         self._enter(FlightMode.HOLD, self.pending_events, "hold command")
         return True
@@ -205,9 +223,29 @@ class FlightBrain:
         elif flying and not (xmin <= x <= xmax and ymin <= y <= ymax):
             self.failsafe = "geofence"
             self._enter(FlightMode.RTL, events, "geofence breach")
-        elif self.mode in (FlightMode.TAKEOFF, FlightMode.MISSION, FlightMode.HOLD, FlightMode.RTL) and t > m.max_duration:
+        elif (not self.interactive and t > m.max_duration
+              and self.mode in (FlightMode.TAKEOFF, FlightMode.MISSION, FlightMode.HOLD, FlightMode.RTL)):
+            # Fixed missions have a time limit; interactive sessions are limited by the battery instead.
             self.failsafe = "timeout"
             self._enter(FlightMode.LAND, events, "mission time limit")
+
+    def map_rays(self, position: np.ndarray, n: int = 48, max_range: float = 1.5) -> tuple[np.ndarray, np.ndarray]:
+        """Virtual range readings from the occupancy map (obstacles we've seen, in every direction).
+        Used to fill the sensors' blind spots; see ``map_memory``."""
+        g = self.planner.grid
+        angles = np.linspace(-np.pi, np.pi, n, endpoint=False)
+        steps = np.arange(g.res, max_range, g.res / 2)
+        pts = position[None, None, :2] + np.stack([np.cos(angles), np.sin(angles)], axis=1)[:, None, :] * steps[None, :, None]
+        r, c = g.to_cell(pts.reshape(-1, 2))
+        inside = (r >= 0) & (r < g.ny) & (c >= 0) & (c < g.nx)
+        occ = np.zeros(len(r), bool)
+        # Only strongly confirmed cells: cone smear around door frames is weak evidence and would
+        # make a doorway look closed (or push the drone around inside it).
+        occ[inside] = g.log_odds[r[inside], c[inside]] > 1.5
+        occ = occ.reshape(n, len(steps))
+        first = np.where(occ.any(axis=1), occ.argmax(axis=1), -1)
+        ranges = np.where(first >= 0, steps[np.maximum(first, 0)], self.avoider.max_range)
+        return ranges, angles
 
     def fence_ranges(self, position: np.ndarray, angles: np.ndarray, max_range: float) -> np.ndarray:
         """Distance along each beam to the geofence, so the avoider treats it as a wall."""
@@ -261,6 +299,7 @@ class FlightBrain:
             if pos[2] > self.altitude - 0.25:
                 if self.interactive:
                     self.hold_xy = pos[:2].copy()
+                    self.hold_anchor = self.hold_xy.copy()
                     self.yaw_target = self.yaw_sp
                     self._enter(FlightMode.HOLD, events, "takeoff altitude reached")
                 else:
@@ -277,6 +316,7 @@ class FlightBrain:
                     if self.wp_index >= len(self.waypoints):
                         if self.interactive:
                             self.hold_xy = pos[:2].copy()
+                            self.hold_anchor = self.hold_xy.copy()
                             self.yaw_target = self.yaw_sp
                             self._enter(FlightMode.HOLD, events, "goal reached")
                         else:
@@ -305,6 +345,13 @@ class FlightBrain:
                         steer = steer / max(np.linalg.norm(steer), 1e-6) * max(np.linalg.norm(steer), m.cruise_speed * 2.0)
             if self.failsafe != "geofence":  # when already outside, let RTL fly back in
                 ranges = np.minimum(ranges, self.fence_ranges(pos, angles, self.avoider.max_range))
+            if self.cfg.avoidance.map_memory and self.planner is not None:
+                # Memory fills the blind spots only: where a live sensor is looking, trust it.
+                mr, ma = self.map_rays(pos, max_range=self.avoider.max_range)
+                sens = self.cfg.sensors
+                heads = est.euler[2] + np.radians(np.asarray(sens.tof_headings_deg, dtype=float))
+                seen = (np.abs(wrap_angle(ma[:, None] - heads[None, :])) <= math.radians(sens.tof_fov_deg) / 2).any(axis=1)
+                ranges, angles = np.concatenate([ranges, mr[~seen]]), np.concatenate([angles, ma[~seen]])
             observed = None
             turning = False
             a = self.cfg.avoidance
@@ -331,13 +378,15 @@ class FlightBrain:
                     self.planner.reset()  # obstacles lower than the new altitude no longer matter
                     self.replan_timer = 0.0
                 events.append(f"blocked: climbing to {self.altitude:.1f} m")
-            desired = avoid.velocity_xy
+            desired = avoid.velocity_xy - avoid.repulsion  # goal-seeking part (the push is added back below)
             if a.max_heading_offset_deg is not None and np.linalg.norm(desired) > 0.2:
                 # Sparse sensors see best straight ahead: crawl until the nose points where we go.
                 off = abs(float(wrap_angle(math.atan2(desired[1], desired[0]) - est.euler[2])))
                 lim = math.radians(a.max_heading_offset_deg)
                 if off > lim:
-                    desired = desired * max(0.15, 1.0 - (off - lim) / (math.pi / 2))
+                    # Outside the sensors' view: slow sharply, and stop completely beyond 30 deg more.
+                    desired = desired * max(0.0, 1.0 - (off - lim) / (math.pi / 6))
+            desired = desired + avoid.repulsion
             # Jerk-limited reference model; allow harder manoeuvres when something is close.
             urgent = avoid.mode is AvoidMode.BLOCKED or avoid.min_range < a.stop_distance + 0.5
             a_max = a.max_accel * (2.0 if urgent else 1.0)
@@ -349,9 +398,19 @@ class FlightBrain:
             if not np.allclose(self.vel_cmd, prev_cmd + self.acc_ff * dt):
                 # The governor cut speed: brake now rather than through the jerk limit.
                 self.acc_ff = _clip_norm((self.vel_cmd - prev_cmd) / dt, 2.0 * a.max_accel)
-            sp.position = np.array([np.nan, np.nan, self.altitude])
+            sp.position = np.array([np.nan, np.nan, self.altitude_command])
             sp.velocity = np.array([self.vel_cmd[0], self.vel_cmd[1], 0.0])
             sp.acceleration = np.array([self.acc_ff[0], self.acc_ff[1], 0.0])
+            if float(np.linalg.norm(self.vel_cmd)) < 0.03 and float(np.linalg.norm(desired)) < 0.03:
+                # Stopped (blocked, or turning to look): hold this exact spot instead of a zero
+                # velocity, which would let the drone drift on its position-estimate errors.
+                if self.brake_xy is None:
+                    self.brake_xy = pos[:2].copy()
+                sp.position = np.array([self.brake_xy[0], self.brake_xy[1], self.altitude_command])
+                sp.velocity = np.zeros(3)
+                sp.acceleration = np.zeros(3)
+            else:
+                self.brake_xy = None
             # Point the camera (and, with a ToF ring, the best sensors) where we're going.
             if turning:
                 face = steer
@@ -371,7 +430,20 @@ class FlightBrain:
             sp.yaw = self.yaw_sp
 
         if self.mode is FlightMode.HOLD:
-            sp.position = np.array([self.hold_xy[0], self.hold_xy[1], self.altitude])
+            # Hovering still keeps its distance: if something shows up inside the safety margin on the
+            # live sensors (e.g. we drifted while turning), ease the hover point away from it, slowly
+            # and by at most 0.3 m in total, so it can never run away across the room.
+            if len(ranges):
+                keep = self.cfg.avoidance.safety_radius + 0.15
+                rr = np.minimum(ranges, self.fence_ranges(pos, angles, self.avoider.max_range))
+                i = int(np.argmin(rr))
+                if rr[i] < keep:
+                    away = -np.array([math.cos(angles[i]), math.sin(angles[i])])
+                    moved = self.hold_xy + away * min(0.5 * (keep - rr[i]), 0.015)
+                    off = moved - self.hold_anchor
+                    n = float(np.linalg.norm(off))
+                    self.hold_xy = self.hold_anchor + (off * (0.3 / n) if n > 0.3 else off)
+            sp.position = np.array([self.hold_xy[0], self.hold_xy[1], self.altitude_command])
             err = float(wrap_angle(self.yaw_target - self.yaw_sp))
             step = m.max_yaw_rate * dt
             self.yaw_sp = float(wrap_angle(self.yaw_sp + np.clip(err, -step, step)))
@@ -421,7 +493,8 @@ class MissionResult:
 
 
 class SimulationRunner:
-    def __init__(self, cfg: SkyMindConfig, run_dir: str | Path, record_video: bool = True, verbose: bool = False):
+    def __init__(self, cfg: SkyMindConfig, run_dir: str | Path, record_video: bool = True, verbose: bool = False,
+                 prior_map: str | Path | None = None):
         self.cfg = cfg
         self.run_dir = Path(run_dir)
         self.verbose = verbose
@@ -434,6 +507,8 @@ class SimulationRunner:
         self.camera = SimCamera(cfg.camera, self.world, self.rng)
         self.analyzer = FrameAnalyzer(cfg.vision)
         self.brain = FlightBrain(cfg, cfg.sensors.lidar_max_range)
+        if prior_map is not None and not self.brain.load_prior_map(prior_map):
+            raise ValueError(f"prior map {prior_map} does not match this scenario's geofence/resolution")
         self.power = PowerModel(cfg.vehicle)
         self.battery = Battery(cfg.battery.capacity_wh, self.power)
         self.record_video = record_video
@@ -495,6 +570,8 @@ class SimulationRunner:
 
                 if k % brain_every == 0:
                     ranges, angles = self.lidar.scan(st.position, st.euler[2])
+                    fp = cfg.vehicle.body_radius + st.position[2] * math.tan(math.radians(13.5))  # downward ToF cone
+                    self.brain.ground_below = self.world.height_below_footprint(st.position, fp)
                     # Over a ground-station link the brain sees data that is link_latency old.
                     sensed.append((est, ranges, angles))
                     b_est, b_ranges, b_angles = sensed[0] if len(sensed) > lag_ticks else sensed[-1]

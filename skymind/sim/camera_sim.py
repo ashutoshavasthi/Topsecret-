@@ -30,6 +30,7 @@ class SimCamera:
         self.cfg, self.world, self.rng = cfg, world, rng
         self.w, self.h = cfg.width, cfg.height
         self.f = (self.w / 2.0) / math.tan(math.radians(cfg.fov_deg) / 2.0)
+        self.extra_spheres: list[tuple[np.ndarray, float, tuple[int, int, int]]] = []
         self.cx, self.cy = self.w / 2.0, self.h / 2.0
         u = np.arange(self.w) + 0.5
         self.col_rel = np.arctan2(self.cx - u, self.f)  # +left
@@ -112,4 +113,15 @@ class SimCamera:
             x1, y1 = min(self.w, int(u + r) + 1), min(self.h, int(v + r) + 1)
             if x1 > x0 and y1 > y0:
                 visible.append(GroundTruthBox(tgt.label, (x0, y0, x1 - x0, y1 - y0), float(np.linalg.norm(rel))))
+        # Moving things that aren't scoring targets (e.g. a thrown paper ball).
+        for pos, radius, colour in self.extra_spheres:
+            rel = np.asarray(pos) - position
+            x_f = float(rel[:2] @ fwd)
+            if x_f < 0.15:
+                continue
+            u = self.cx - self.f * float(rel[:2] @ left) / x_f
+            v = horizon - self.f * (float(pos[2]) - cam_z) / x_f
+            r = max(1, int(round(self.f * radius / x_f)))
+            if -r <= u < self.w + r and -r <= v < self.h + r:
+                cv2.circle(img, (int(round(u)), int(round(v))), r, colour, -1, lineType=cv2.LINE_AA)
         return visible

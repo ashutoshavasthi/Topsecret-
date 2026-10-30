@@ -68,12 +68,86 @@ class LiveSession:
         self._last_labels: set[str] = set()
         self._last_snap_t = -1e9
         self._cam_frames = 0
+        # Room-scan inputs: low obstacles seen by the downward sensor, and camera sightings
+        # placed on the map using the range sensor along the same bearing (vision + ranging).
+        self.low_cells: dict[tuple[int, int], float] = {}
+        self.sightings: list[tuple] = []  # camera rays: (label, drone xy, world bearing, confidence)
+        self.world_angles = np.zeros(0)
+        self.room_scan = None
+        self.prior_map: str | None = None
 
     def _new_brain(self) -> FlightBrain:
         brain = FlightBrain(self.cfg, self.cfg.sensors.lidar_max_range)
         brain.interactive = True
         brain.waypoints = []
+        if getattr(self, "prior_map", None):
+            brain.load_prior_map(self.prior_map)
         return brain
+
+    def use_prior_map(self, npz_path: str) -> bool:
+        self.prior_map = str(npz_path)
+        return self.submit(lambda: self.brain.load_prior_map(npz_path))
+
+    # ------------------------------------------------------------ room scan
+    def _note_sightings(self, dets: list[dict], position: np.ndarray) -> None:
+        """Remember each camera detection as a viewing ray (where we were, which direction).
+        Rays from different places are triangulated into map positions by the room scan."""
+        for d in dets:
+            self.sightings.append((d["label"], position[:2].copy(), float(d["bearing"]), float(d["confidence"])))
+        if len(self.sightings) > 8000:
+            self.sightings = self.sightings[-8000:]
+
+    def _note_ground(self, position: np.ndarray, height_below: float) -> None:
+        if height_below > 0.1 and self.brain.planner is not None:
+            r, c = self.brain.planner.grid.to_cell(position[:2])
+            key = (int(r[0]), int(c[0]))
+            self.low_cells[key] = max(self.low_cells.get(key, 0.0), height_below)
+
+    def _known_low_nearby(self, position: np.ndarray, radius: float = 0.45) -> float:
+        """Highest low obstacle already mapped within ``radius``: climb *before* reaching the table."""
+        if not self.low_cells or self.brain.planner is None:
+            return 0.0
+        g = self.brain.planner.grid
+        r0, c0 = g.to_cell(position[:2])
+        k = int(math.ceil(radius / g.res))
+        best = 0.0
+        for (r, c), h in self.low_cells.items():
+            if abs(r - r0[0]) <= k and abs(c - c0[0]) <= k:
+                best = max(best, h)
+        return best
+
+    def map_snapshot(self):
+        import copy
+
+        return self.submit(lambda: copy.deepcopy(self.brain.planner.grid) if self.brain.planner is not None else None)
+
+    def build_scan(self, save_dir: str | Path | None = None):
+        from skymind.survey import analyse, save, triangulate_landmarks
+
+        grid = self.map_snapshot()
+        if grid is None:
+            return None
+        cfg = self.cfg
+        scan = analyse(grid, cfg.mission.geofence, 2.0 * cfg.avoidance.safety_radius, dict(self.low_cells),
+                       triangulate_landmarks(list(self.sightings), cfg.mission.geofence))
+        self.room_scan = scan
+        # Doorways become places you can name: "go through doorway 1".
+        for p in scan.passages:
+            if p.kind in ("doorway", "exit") and p.passable:
+                cfg.mission.places[f"{p.kind} {p.id}"] = list(p.center)
+        if save_dir is not None:
+            save(save_dir, grid, scan, cfg.mission.geofence)
+        self._event("room scan: " + scan.summary())
+        return scan
+
+    def render_scan(self) -> bytes:
+        from skymind.survey import render
+
+        if self.room_scan is None:
+            return b""
+        grid = self.map_snapshot()
+        ok, png = cv2.imencode(".png", render(grid, self.room_scan, self.cfg.mission.geofence, places=self.cfg.mission.places))
+        return png.tobytes() if ok else b""
 
     # ------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -94,6 +168,10 @@ class LiveSession:
                 self._tick()
         except Exception as exc:  # surface crashes to the app instead of dying silently
             self.error = f"{type(exc).__name__}: {exc}"
+            self._running = False  # wake every waiter: nothing is flying this drone any more
+            with self._cond:
+                self.state = {**self.state, "error": self.error}
+                self._cond.notify_all()
             self._event(f"SESSION ERROR: {self.error}")
             raise
 
@@ -214,6 +292,8 @@ class LiveSession:
             f"alt {st.get('position', [0, 0, 0])[2]:4.1f}m  bat {st.get('battery', 1.0) * 100:3.0f}%",
             f"obst {st.get('min_range', 0):3.1f}m {hud_extra}",
         ]
+        if analyse and dets and self.brain.airborne:
+            self._note_sightings(dets, np.array(st.get("position", [0, 0, 0])))
         annotated = draw_overlay(frame, analysis, hud)
         ok, jpg = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
         labels = {d["label"] for d in dets}
@@ -391,6 +471,23 @@ class SimLiveSession(LiveSession):
         self.setpoint: Setpoint | None = None
         self.in_collision = False
         self._wall0 = None
+        from skymind.dodge import LiveDodge
+
+        self.dodge = LiveDodge(cfg, self.rng)
+        self._normal_tilt = self.controller.max_tilt
+
+    def throw_ball(self, speed: float = 5.0) -> bool:
+        """Simulation test: throw a paper ball at the drone from in front."""
+
+        def do():
+            if not self.brain.airborne:
+                return False
+            st = self.sim.state
+            self.dodge.throw(st.position.copy(), st.euler[2], speed)
+            self._event(f"ball thrown at {speed:.0f} m/s")
+            return True
+
+        return self.submit(do)
 
     def reset(self) -> bool:
         """Put the drone back on the ground at home (simulation only)."""
@@ -414,7 +511,14 @@ class SimLiveSession(LiveSession):
         est = self.estimator.estimate()
         st = sim.state
         ranges, angles = self.lidar.scan(st.position, st.euler[2])
-        self.ranges = ranges
+        self.ranges, self.world_angles = ranges, angles
+        if self.brain.airborne and st.position[2] > 0.3:
+            # Downward ToF cone (~27 deg) + prop radius: sees a table edge before the props reach it.
+            fp = cfg.vehicle.body_radius + st.position[2] * math.tan(math.radians(13.5))
+            seen, at = self.world.height_below_footprint(st.position, fp, where=True)
+            # Record it where the footprint saw it (estimate frame), for the room scan.
+            self._note_ground(self._estimate().position + (at - st.position), seen)
+            self.brain.ground_below = max(seen, self._known_low_nearby(self._estimate().position))
         landed = sim.on_ground and self.brain.mode is FlightMode.LAND
         out = self.brain.update(est, ranges, angles, self.battery.fraction, self.t, self.brain_every * dt, landed)
         for e in out.events:
@@ -427,8 +531,17 @@ class SimLiveSession(LiveSession):
             if self.k % self.pos_every == 0:
                 self.estimator.update_position(sim.position_measurement(), self.pos_every * dt)
             est = self.estimator.estimate()
+            was_escaping = self.dodge.escaping(self.t)
+            if self.dodge.balls:
+                for e in self.dodge.step(self.t, dt, sim, cfg.vehicle.body_radius):
+                    self._event(e)
+            escaping = self.dodge.escaping(self.t) and self.brain.airborne
+            self.controller.max_tilt = math.radians(self.dodge.rcfg.dodge_tilt_deg) if escaping else self._normal_tilt
+            self.controller.min_thrust_frac = 0.05 if escaping else 0.3
+            if was_escaping and not escaping and self.brain.mode is FlightMode.HOLD:
+                self.brain.command_hold(est.position)  # stay where the dodge took us
             if self.brain.airborne and self.brain.mode is not FlightMode.CRASHED:
-                motors = self.controller.update(est, self.setpoint, dt).motors
+                motors = self.controller.update(est, self.dodge.setpoint() if escaping else self.setpoint, dt).motors
             else:
                 motors = self.controller.idle().motors
                 self.controller.reset()
@@ -452,11 +565,13 @@ class SimLiveSession(LiveSession):
                                 self.battery.fraction, self.battery.last_power, clear if clear < 1e8 else None)
             if self.k % self.cam_every == 0:
                 roll, pitch, yaw = sim.state.euler
+                self.camera.extra_spheres = [(b.pos.copy(), b.radius, (235, 235, 235)) for b in self.dodge.balls if b.active]
                 frame, gt = self.camera.render(pos, yaw, roll, pitch, sim.state.omega)
                 gtl = [{"label": g.label, "bbox": g.bbox, "distance": g.distance} for g in gt]
                 self._process_frame(frame, yaw, ground_truth=gtl)
         # The flight brain and the UI see the onboard estimate; the sim keeps the truth for scoring.
-        self._publish(self.estimator.estimate(), self.battery.fraction, self.battery.last_power, {"simulated": True})
+        self._publish(self.estimator.estimate(), self.battery.fraction, self.battery.last_power,
+                      {"simulated": True, "dodge": dict(self.dodge.stats), "scan_ready": self.room_scan is not None})
         if self.speed > 0:
             ahead = self._wall0 + self.t / self.speed - time.time()
             if ahead > 0:
@@ -511,7 +626,7 @@ class RealLiveSession(LiveSession):
         tm = v.poll()
         self._est = StateEstimate(tm.position, tm.velocity, quat_from_euler(*tm.rpy), tm.rates)
         ranges, body_angles = self.sensors.scan()
-        self.ranges = ranges
+        self.ranges, self.world_angles = ranges, body_angles + tm.rpy[2]
         out = self.brain.update(self._est, ranges, body_angles + tm.rpy[2], tm.battery_fraction, self.t, 1.0 / self.LOOP_HZ, tm.landed)
         for e in out.events:
             self._event(e)

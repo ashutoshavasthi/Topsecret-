@@ -71,6 +71,9 @@ class DroneSkills:
             Skill("find", "Look for an object; if found, face it.", {"object": "string, e.g. 'red marker', 'person', 'chair'"}, self.find),
             Skill("approach", "Find an object and fly up close to it (stops at a safe distance).", {"object": "string"}, self.approach),
             Skill("describe", "Describe what the camera sees right now.", {}, self.describe),
+            Skill("survey", "Explore the whole room by myself and make a room scan: obstacles, doorways, exits, "
+                            "tight gaps, low obstacles. Takes a few minutes.", {}, self.survey),
+            Skill("room_report", "Report what the last room scan found.", {}, self.room_report),
             Skill("photo", "Save a photo from the camera.", {}, self.photo),
         ]:
             self.skills[sk.name] = sk
@@ -332,6 +335,70 @@ class DroneSkills:
             r.text = f"I'm right in front of the {object} now."
             r.observation = True
         return r
+
+    def survey(self, max_minutes: float = 4.0, max_viewpoints: int = 20) -> SkillResult:
+        """Frontier exploration: look around, fly to the nearest edge of the unknown, repeat."""
+        bad = self._ensure_airborne()
+        if bad:
+            return bad
+        s, cfg = self.s, self.cfg
+        if s.brain.planner is None:
+            return SkillResult(False, "I need my mapping system for a room scan, and it's switched off in the config.")
+        t0 = s.status().get("t", 0.0)
+        visited: list[np.ndarray] = []
+        failed: list[np.ndarray] = []
+        # While exploring, plan routes with 10 cm extra margin: half-mapped furniture beside a
+        # narrow gap is invisible to forward-only sensors, so don't squeeze through gaps that barely fit.
+        base_inflate = s.brain.planner.inflate
+        s.submit(lambda: setattr(s.brain.planner, "inflate", base_inflate + 0.1))
+        try:
+            return self._explore(max_minutes, max_viewpoints, t0, visited, failed)
+        finally:
+            s.submit(lambda: setattr(s.brain.planner, "inflate", base_inflate))
+
+    def _explore(self, max_minutes, max_viewpoints, t0, visited, failed) -> SkillResult:
+        from skymind.survey import frontier_targets
+
+        s, cfg = self.s, self.cfg
+        for _ in range(max_viewpoints):
+            if self.cancel.is_set():
+                return SkillResult(False, "Room scan cancelled.")
+            st = s.status()
+            if st.get("battery", 1.0) < cfg.battery.rtl_threshold + 0.1:
+                break
+            if st.get("t", 0.0) - t0 > 60.0 * max_minutes:
+                break
+            self._sweep()
+            grid = s.map_snapshot()
+            # Exploring means flying near half-mapped things: keep a bigger margin than normal flight.
+            blocked = grid.obstacle_mask(cfg.avoidance.safety_radius + 0.15)
+            targets = frontier_targets(grid, blocked, self._pos(), avoid=visited + failed)
+            if not targets:
+                break
+            target = targets[0]
+            r = self.go_to_xy(float(target[0]), float(target[1]))
+            (visited if r.ok else failed).append(target)
+        if self.cancel.is_set():
+            return SkillResult(False, "Room scan cancelled.")
+        self._look_around()
+        scan = s.build_scan(s.run_dir)
+        if scan is None:
+            return SkillResult(False, "I couldn't build a room scan.")
+        return SkillResult(True, scan.summary(), {"scan": scan.to_dict()}, observation=True)
+
+    def _sweep(self) -> None:
+        """A quick full turn in three 120-degree steps: enough for mapping and for the camera."""
+        yaw0 = self._yaw()
+        for k in (1, 2, 3):
+            if self.cancel.is_set():
+                return
+            self._face(float(wrap_angle(yaw0 + k * 2.0 * math.pi / 3.0)), timeout=6.0)
+
+    def room_report(self) -> SkillResult:
+        scan = self.s.room_scan
+        if scan is None:
+            return SkillResult(False, "I haven't scanned this room yet. Say 'scan the room' first.", observation=True)
+        return SkillResult(True, scan.summary(), {"scan": scan.to_dict()}, observation=True)
 
     def describe(self) -> SkillResult:
         """Without a vision model: summarise detector output and nearby obstacles."""

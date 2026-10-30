@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from skymind.config import SensorConfig
@@ -18,7 +20,10 @@ class SimLidar:
         """Return (ranges, world_angles). Beams with no return read ``max_range``."""
         world_angles = self.body_angles + yaw
         max_range = self.cfg.lidar_max_range
-        hits = self.world.raycast(position, world_angles, max_range)
+        # A ToF cone (~25 deg tall) still sees objects a little below it, at the ~0.6 m where
+        # it matters; a spinning lidar's beam is nearly flat.
+        tol = math.tan(math.radians(self.cfg.tof_fov_deg) / 2) * 0.6 if self.cfg.range_sensor == "tof_ring" else 0.02
+        hits = self.world.raycast(position, world_angles, max_range, height_tolerance=tol)
         frac = self.cfg.tof_noise_frac if self.cfg.range_sensor == "tof_ring" else 0.0
         std = np.maximum(self.cfg.lidar_noise_std, frac * hits.distance)
         noisy = hits.distance + self.rng.normal(0.0, 1.0, len(world_angles)) * std

@@ -41,6 +41,7 @@ avoidance:
   map_resolution: 0.15
   replan_interval: 1.5        # cheaper replanning for the Pi Zero 2 W
   path_lookahead: 3.0
+  map_memory: true            # mapped obstacles count as virtual readings (sensors only see ahead)
   max_heading_offset_deg: 35  # turn to face travel before moving fast (sensors are densest ahead)
 
 camera:

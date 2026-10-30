@@ -51,8 +51,12 @@ class World:
         return len(self.cyl) + len(self.box)
 
     # ------------------------------------------------------------------ rays
-    def raycast(self, origin: np.ndarray, angles: np.ndarray, max_range: float, respect_height: bool = True) -> RayHits:
-        """Horizontal rays from ``origin`` at world-frame ``angles`` (radians)."""
+    def raycast(self, origin: np.ndarray, angles: np.ndarray, max_range: float, respect_height: bool = True,
+                height_tolerance: float = 0.0) -> RayHits:
+        """Horizontal rays from ``origin`` at world-frame ``angles`` (radians).
+
+        With ``respect_height``, objects lower than the sensor are missed unless they reach
+        within ``height_tolerance`` of it (a cone-shaped ToF beam also sees slightly below itself)."""
         n = len(angles)
         d = np.stack([np.cos(angles), np.sin(angles)], axis=1)  # (n, 2)
         o = origin[:2]
@@ -68,7 +72,7 @@ class World:
             t = np.where(c[None, :] < 0.0, 0.0, -b - sq)
             valid = (disc >= 0.0) & (t >= 0.0)
             if respect_height:
-                valid &= (origin[2] < self.cyl[:, 3])[None, :]
+                valid &= (origin[2] < self.cyl[:, 3] + height_tolerance)[None, :]
             t = np.where(valid, t, INF)
             j = np.argmin(t, axis=1)
             tj = t[np.arange(n), j]
@@ -87,7 +91,7 @@ class World:
             tmax = np.minimum(np.maximum(tx1, tx2), np.maximum(ty1, ty2))
             valid = tmax >= np.maximum(tmin, 0.0)
             if respect_height:
-                valid &= (origin[2] < self.box[:, 4])[None, :]
+                valid &= (origin[2] < self.box[:, 4] + height_tolerance)[None, :]
             t = np.where(valid, np.maximum(tmin, 0.0), INF)
             j = np.argmin(t, axis=1)
             tj = t[np.arange(n), j]
@@ -112,6 +116,33 @@ class World:
             dz = np.maximum(p[2] - self.box[:, 4], 0.0)
             best = min(best, float(np.min(np.sqrt(dx * dx + dy * dy + dz * dz))))
         return best
+
+    def height_below(self, p: np.ndarray) -> float:
+        """Height of whatever is directly under point ``p`` (0 = floor), as a downward ToF sees it."""
+        h = 0.0
+        if len(self.cyl):
+            under = np.linalg.norm(self.cyl[:, :2] - p[:2], axis=1) <= self.cyl[:, 2]
+            under &= self.cyl[:, 3] < p[2]
+            if np.any(under):
+                h = max(h, float(self.cyl[under, 3].max()))
+        if len(self.box):
+            b = self.box
+            under = (b[:, 0] <= p[0]) & (p[0] <= b[:, 2]) & (b[:, 1] <= p[1]) & (p[1] <= b[:, 3]) & (b[:, 4] < p[2])
+            if np.any(under):
+                h = max(h, float(b[under, 4].max()))
+        return h
+
+    def height_below_footprint(self, p: np.ndarray, radius: float, samples: int = 8, where: bool = False):
+        """Highest thing inside a downward sensor's footprint (a disc of ``radius`` around ``p``).
+        With ``where=True`` also returns the point where it was seen."""
+        h, at = self.height_below(p), np.asarray(p, float)
+        for k in range(samples):
+            a = 2 * np.pi * k / samples
+            q = p + np.array([radius * np.cos(a), radius * np.sin(a), 0.0])
+            hq = self.height_below(q)
+            if hq > h:
+                h, at = hq, q
+        return (h, at) if where else h
 
     def wind_at(self, rng: np.random.Generator) -> np.ndarray:
         if self.gust_std <= 0.0:

@@ -100,6 +100,13 @@ python -m skymind design config/micro_quiet.yaml --sweep-battery 4.4,6.7,8.1,9.6
 python -m skymind bench --config config/micro_indoor.yaml                    # onboard CPU budget (run it on the Pi)
 ```
 
+## Also in this repo: MemBrain (memristor AI)
+
+[`memristor-ai/`](memristor-ai/README.md) is a separate project: a neural network that computes and
+learns inside simulated memristor crossbar arrays (RRAM, PCM, ECRAM). It models device physics,
+write-verify programming, ADC/DAC, IR drop and drift, and compares on-chip training with
+train-then-deploy. It has its own README, tests and CI job.
+
 ## Documentation
 
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the pieces fit, with the main design decisions

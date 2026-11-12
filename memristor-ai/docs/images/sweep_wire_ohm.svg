@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" width="720" height="420" font-family="Helvetica, Arial, sans-serif" font-size="12">
+<rect width="720" height="420" fill="#ffffff"/>
+<text x="70" y="24" font-size="15" font-weight="bold" fill="#111827">rram: accuracy vs wire_ohm</text>
+<line x1="70" x2="684" y1="311.3" y2="311.3" stroke="#e5e7eb"/>
+<text x="62" y="315.3" text-anchor="end" fill="#4b5563">90</text>
+<line x1="70" x2="684" y1="209.8" y2="209.8" stroke="#e5e7eb"/>
+<text x="62" y="213.8" text-anchor="end" fill="#4b5563">90.5</text>
+<line x1="70" x2="684" y1="108.2" y2="108.2" stroke="#e5e7eb"/>
+<text x="62" y="112.2" text-anchor="end" fill="#4b5563">91</text>
+<line x1="70.0" x2="70.0" y1="44" y2="340" stroke="#f3f4f6"/>
+<text x="70.0" y="358" text-anchor="middle" fill="#4b5563">0</text>
+<line x1="192.8" x2="192.8" y1="44" y2="340" stroke="#f3f4f6"/>
+<text x="192.8" y="358" text-anchor="middle" fill="#4b5563">1</text>
+<line x1="315.6" x2="315.6" y1="44" y2="340" stroke="#f3f4f6"/>
+<text x="315.6" y="358" text-anchor="middle" fill="#4b5563">2</text>
+<line x1="438.4" x2="438.4" y1="44" y2="340" stroke="#f3f4f6"/>
+<text x="438.4" y="358" text-anchor="middle" fill="#4b5563">3</text>
+<line x1="561.2" x2="561.2" y1="44" y2="340" stroke="#f3f4f6"/>
+<text x="561.2" y="358" text-anchor="middle" fill="#4b5563">4</text>
+<line x1="684.0" x2="684.0" y1="44" y2="340" stroke="#f3f4f6"/>
+<text x="684.0" y="358" text-anchor="middle" fill="#4b5563">5</text>
+<rect x="70" y="44" width="614" height="296" fill="none" stroke="#9ca3af"/>
+<text x="377.0" y="378" text-anchor="middle" fill="#111827">wire resistance per cell (ohm)</text>
+<text transform="translate(18,192.0) rotate(-90)" text-anchor="middle" fill="#111827">test accuracy (%)</text>
+<polyline points="70.0,118.4 131.4,133.6 192.8,108.2 315.6,174.2 684.0,285.9" fill="none" stroke="#2563eb" stroke-width="2.2"/>
+<circle cx="70.0" cy="118.4" r="3.2" fill="#2563eb"/>
+<circle cx="131.4" cy="133.6" r="3.2" fill="#2563eb"/>
+<circle cx="192.8" cy="108.2" r="3.2" fill="#2563eb"/>
+<circle cx="315.6" cy="174.2" r="3.2" fill="#2563eb"/>
+<circle cx="684.0" cy="285.9" r="3.2" fill="#2563eb"/>
+<line x1="70.0" x2="92.0" y1="402" y2="402" stroke="#2563eb" stroke-width="3"/>
+<text x="98.0" y="406" fill="#111827">deploy (write-verify)</text>
+<polyline points="70.0,82.8 131.4,82.8 192.8,159.0 315.6,169.2 684.0,326.5" fill="none" stroke="#dc2626" stroke-width="2.2"/>
+<circle cx="70.0" cy="82.8" r="3.2" fill="#dc2626"/>
+<circle cx="131.4" cy="82.8" r="3.2" fill="#dc2626"/>
+<circle cx="192.8" cy="159.0" r="3.2" fill="#dc2626"/>
+<circle cx="315.6" cy="169.2" r="3.2" fill="#dc2626"/>
+<circle cx="684.0" cy="326.5" r="3.2" fill="#dc2626"/>
+<line x1="274.66666666666663" x2="296.66666666666663" y1="402" y2="402" stroke="#dc2626" stroke-width="3"/>
+<text x="302.66666666666663" y="406" fill="#111827">deploy (hardware-aware)</text>
+<polyline points="70.0,57.5 131.4,57.5 192.8,57.5 315.6,57.5 684.0,57.5" fill="none" stroke="#16a34a" stroke-width="2.2"/>
+<circle cx="70.0" cy="57.5" r="3.2" fill="#16a34a"/>
+<circle cx="131.4" cy="57.5" r="3.2" fill="#16a34a"/>
+<circle cx="192.8" cy="57.5" r="3.2" fill="#16a34a"/>
+<circle cx="315.6" cy="57.5" r="3.2" fill="#16a34a"/>
+<circle cx="684.0" cy="57.5" r="3.2" fill="#16a34a"/>
+<line x1="479.3333333333333" x2="501.3333333333333" y1="402" y2="402" stroke="#16a34a" stroke-width="3"/>
+<text x="507.3333333333333" y="406" fill="#111827">digital float</text>
+</svg>

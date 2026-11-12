@@ -30,3 +30,27 @@ jobs:
         with:
           name: demo-flights
           path: runs/
+
+  membrain:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: memristor-ai
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
+      - name: Device presets and pulse-response curves
+        run: python -m membrain devices --out runs/ci-devices
+      - name: RRAM - deploy vs train on-chip
+        run: python -m membrain demo --device rram --out runs/ci-demo-rram
+      - name: PCM - accuracy over 10 years of drift
+        run: python -m membrain drift --device pcm --out runs/ci-drift
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: membrain-runs
+          path: memristor-ai/runs/
